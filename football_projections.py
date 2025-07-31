@@ -21,14 +21,18 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
 path = "C:/Users/Subramanya.Ganti/Downloads/"
+valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
+                 'championship','liga portugal','eredivisie','serie b','belgian pro league']
 
 #%% functions
 def league_mapping(code):
     league_code = {
         9: 'Premier-League', 11: 'Serie-A', 12: 'La-Liga', 13: 'Ligue-1', 20: 'Bundesliga',
-        10: 'Championship', 33: '2-Bundesliga', 17: 'Segunda-Division', 18: 'Seire-B', 60: 'Ligue-2',
-        23: 'Eredivisie', 32: 'Primeira-Liga', 37: 'Belgian-Pro-League', 24: 'Serie-A', 31: 'Liga-MX', 21: 'Liga-Profesional-Argentina',
-        676: 'UEFA-Euro', 685: 'Copa-America', 1: 'World-Cup'
+        10: 'Championship', 18: 'Seire-B',
+        23: 'Eredivisie', 32: 'Primeira-Liga', 37: 'Belgian-Pro-League', 
+        24: 'Serie-A', 31: 'Liga-MX', 21: 'Liga-Profesional-Argentina', 22: 'Major-League-Soccer',
+        676: 'UEFA-Euro', 685: 'Copa-America', 1: 'World-Cup', 
+        8: 'Champions-League', 19: 'Europa-League', 882: 'Conference-League', 14:'Copa-Libertadores'
         }
     try:
         league = league_code[code]
@@ -108,7 +112,8 @@ def player_stats(club,code,season):
     for i in range(1, len(dfs)):
         merged_df = pd.merge(merged_df, dfs[i], on=['Player', 'Nation', 'Pos', 'Age'], how='left')
     merged_df['o_Touches'] = merged_df.loc[merged_df['Player']=='Opponent Total','TotAtt'].sum()/11
-    games =  merged_df.loc[merged_df['Player']=='Opponent Total','90s'].sum()
+    #games =  merged_df.loc[merged_df['Player']=='Opponent Total','90s'].sum()
+    games =  merged_df.loc[merged_df['Pos']=='GK','MP'].sum()
     merged_df['o_Touches'] = merged_df['o_Touches'] * merged_df['90s'] / games
     merged_df = merged_df.dropna(subset=['Nation','Min'])
     merged_df['season'] = season
@@ -291,9 +296,8 @@ def multi_team_links(start,end,code):
     return raw
 
 def extract_player_data(convert,target):
-    leagues = ['serie a','bundesliga','premier league','la liga','ligue un'];
     df_all = []
-    for l in leagues:
+    for l in valid_leagues:
         df = pd.read_excel(f'{path}/fbref.xlsx',l)
         df = df.drop('Unnamed: 0', axis=1)
         df = df[['Player','club','Nation','Pos','Age','season','Min','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
@@ -307,7 +311,7 @@ def extract_player_data(convert,target):
             df[f.index] = df[f.index] * f.values
             
         df_all.append(df)    
-    return df_all,leagues
+    return df_all,valid_leagues
     
 def league_conversion_factors(read_file):
     if(read_file == 1):
@@ -320,39 +324,51 @@ def league_conversion_factors(read_file):
         all_eqn = [['category'] + leagues]
         
         for ch in categories:
-            eqn = pd.DataFrame(columns=range(0,len(df)), index=range(0,2*len(combos)))
+            eqn = pd.DataFrame(columns=range(0,len(df)), index=range(0,len(combos)))
             eqn[f'{ch} log factor'] = 0.0
             r = 0
             for c in combos:
                 from_df = df[c[0]]
                 from_df['season+1'] = from_df['season'] + 1
+                #from_df[from_df['Min']>=450]
                 to_df = df[c[1]]
                 to_df['season+1'] = to_df['season'] + 1
+                #to_df[to_df['Min']>=450]
                 
                 df_from_to = to_df.merge(from_df, left_on=['Player','Nation','yob','season'], right_on=['Player','Nation','yob','season+1'])
                 #print("from",c[0],"to",c[1],(df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum()))
-                eqn.loc[r,c[0]] = 1
-                eqn.loc[r,c[1]] = -1
-                eqn.loc[r,f'{ch} log factor'] = np.log((df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum()))
-                r+=1
-                
                 df_to_from = from_df.merge(to_df, left_on=['Player','Nation','yob','season'], right_on=['Player','Nation','yob','season+1'])
                 #print("from",c[1],"to",c[0],(df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum()))
-                eqn.loc[r,c[0]] = -1
-                eqn.loc[r,c[1]] = 1
-                eqn.loc[r,f'{ch} log factor'] = np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum()))
                 
+                eqn.loc[r,c[0]] = 1
+                eqn.loc[r,c[1]] = -1
+                if((df_from_to['Min_x'].sum()<1000)|(df_from_to['Min_y'].sum()<1000)|(df_to_from['Min_x'].sum()<1000)|(df_to_from['Min_y'].sum()<1000)):
+                    factor = np.nan
+                else:
+                    factor = np.log((df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum())) -\
+                             np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
+                    factor = factor/2
+                eqn.loc[r,f'{ch} log factor'] = factor
                 r+=1
+                
+                #eqn.loc[r,c[0]] = -1
+                #eqn.loc[r,c[1]] = 1
+                #eqn.loc[r,f'{ch} log factor'] = np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
+                #r+=1
             
-            eqn[[0,1,2,3,4]] = eqn[[0,1,2,3,4]].fillna(0)
+            eqn[list(range(0,len(df)))] = eqn[list(range(0,len(df)))].fillna(0).infer_objects(copy=False)
+            eqn.replace([np.inf, -np.inf], np.nan, inplace=True)
             eqn = eqn[eqn[f'{ch} log factor'].notna()]
             
-            regr = linear_model.LinearRegression()
-            regr.fit(eqn[[0,1,2,3,4]], eqn[f'{ch} log factor'])
+            regr = linear_model.LinearRegression(fit_intercept=False)
+            regr.fit(eqn[list(range(0,len(df)))], eqn[f'{ch} log factor'])
             #all_eqn.append(eqn)
             #all_eqn.loc[r0] = list(regr.coef_) + [ch]
-            print(ch,regr.coef_)
-            all_eqn.append([ch] + list(regr.coef_))
+            coef_list = list(regr.coef_)
+            minimum_element = min(coef_list)
+            coef_list = [element - minimum_element for element in coef_list]
+            print(ch,coef_list)
+            all_eqn.append([ch] + coef_list)
         
         all_eqn = pd.DataFrame(all_eqn)
         all_eqn.columns = all_eqn.iloc[0];all_eqn = all_eqn.drop(0)
@@ -417,10 +433,14 @@ def mean_reversion(proj_year,standard):
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
     
     df['weight'] = pow(2/3,proj_year-df['season'])
-    df_agg = df.pivot_table(values=['Min','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
+    df['weight2'] = pow(2/3,proj_year-df['season']) * df['Min']
+    df_agg = df.pivot_table(values=['Min','Touches','o_Touches','Sh','TotAtt','PrgP','Carries','PrgC',
                                 'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld'],
                               index=['Player','Nation','yob'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight']))
+    df_agg2 = df.pivot_table(values=['Save%','TotCmp%'],
+                              index=['Player','Nation','yob'], 
+                              aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight2']))
     pos = df.pivot_table(values=['Pos'], index=['Player','Nation','yob'], aggfunc=lambda x: ','.join(x.unique()))
     team = df.pivot_table(values=['club'], index=['Player','Nation','yob'], columns=['season'], aggfunc=lambda x: ','.join(x.unique()))
     team.columns = team.columns.droplevel(0)
@@ -442,6 +462,8 @@ def mean_reversion(proj_year,standard):
     age['Age'] = age['Age'] + proj_year - age['season']
     age['season'] = proj_year
     df_agg = df_agg.reset_index()
+    df_agg2 = df_agg2.reset_index()
+    df_agg = df_agg2.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pos.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = team.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = age.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
@@ -475,10 +497,15 @@ def mean_reversion(proj_year,standard):
     return projections_copy
 
 #%% extract data
+#extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
-player_stats_raw = multi_team_links(2017,2024,13)
+#extract player stats for multiple leagues
+player_stats_raw = multi_team_links(2020,2021,37)
 
 #%% analyze
+#team regression analysis
 #summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001)
-#factors = league_conversion_factors(0)
+#player projection data
+factors = league_conversion_factors(1)
+aging = aging_analysis(1)
 projections = mean_reversion(2025,'premier league')
