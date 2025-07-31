@@ -20,9 +20,11 @@ from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
-path = "C:/Users/Subramanya.Ganti/Downloads/"
+#path = "C:/Users/Subramanya.Ganti/Downloads/"
+path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
-                 'championship','liga portugal','eredivisie','serie b','belgian pro league']
+                 'championship','liga portugal','eredivisie','serie b','belgian pro league',
+                 'brazilian serie a','mls']
 
 #%% functions
 def league_mapping(code):
@@ -49,7 +51,10 @@ def fbref_league_fixtures(season,code):
 
 def fbref_team_ids(season,code):
     code,league = league_mapping(code)
-    url = f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats'
+    if(code in [24,31,21,22]): #leagues start in winter
+        url = f'https://fbref.com/en/comps/{code}/{season}/{season}-{league}-Stats'
+    else: #leagues start in summer
+        url = f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats'
     #take care to verify why this bypass is needed
     data  = requests.get(url,verify=False).text
     #data  = requests.get(url).text
@@ -66,8 +71,12 @@ def fbref_team_ids(season,code):
     urls = urls[['team','code','season']]
     return urls
 
-def player_stats(club,code,season):
-    ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats')
+def player_stats(club,code,season,league_code):
+    if(league_code in [24,31,21,22]): #leagues start in winter
+        ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}/{club}-Stats')
+    else: #leagues start in summer
+        ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats')
+    
     basic = ref[0]
     basic.columns = basic.columns.droplevel(0)
     basic = basic[['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s']]
@@ -289,7 +298,7 @@ def multi_team_links(start,end,code):
             c = links.iloc[l]['code']
             s = links.iloc[l]['season']
             print(s,t)
-            raw_stats = player_stats(t,c,s)
+            raw_stats = player_stats(t,c,s,code)
             raw.append(raw_stats)
         season += 1
     raw = pd.concat(raw)
@@ -303,6 +312,7 @@ def extract_player_data(convert,target):
         df = df[['Player','club','Nation','Pos','Age','season','Min','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
                  'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Starts', 'Mn/Start', 'Subs', 'Mn/Sub', 'unSub']]
         df['yob'] = df['season'] - df['Age']
+        if(l in ['brazilian serie a','mls']): df['yob'] -= 1
         df = df.drop_duplicates(subset=['Player', 'club', 'Nation', 'Pos', 'Age', 'season'], keep='first')
         
         if(convert == 1):
@@ -356,7 +366,7 @@ def league_conversion_factors(read_file):
                 #eqn.loc[r,f'{ch} log factor'] = np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
                 #r+=1
             
-            eqn[list(range(0,len(df)))] = eqn[list(range(0,len(df)))].fillna(0).infer_objects(copy=False)
+            eqn[list(range(0,len(df)))] = eqn[list(range(0,len(df)))].fillna(0) #.infer_objects(copy=False)
             eqn.replace([np.inf, -np.inf], np.nan, inplace=True)
             eqn = eqn[eqn[f'{ch} log factor'].notna()]
             
@@ -500,7 +510,7 @@ def mean_reversion(proj_year,standard):
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
-player_stats_raw = multi_team_links(2020,2021,37)
+player_stats_raw = multi_team_links(2018,2024,22)
 
 #%% analyze
 #team regression analysis
@@ -509,3 +519,6 @@ player_stats_raw = multi_team_links(2020,2021,37)
 factors = league_conversion_factors(1)
 aging = aging_analysis(1)
 projections = mean_reversion(2025,'premier league')
+#to identify players whose data has been duplicated due to yob mismatch
+duplicates = projections.pivot_table(values=['season'], index=['Player','Nation','Age'], aggfunc='count')
+duplicates = duplicates[duplicates['season']>1]
