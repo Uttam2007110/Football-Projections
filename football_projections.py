@@ -20,12 +20,12 @@ from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
-#path = "C:/Users/Subramanya.Ganti/Downloads/"
-path = "C:/Users/uttam/Desktop/Sports/football"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+#path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
-                 'brazilian serie a','mls','liga mx',
-                 'champions league','europa league','conference league']
+                 'brazilian serie a','mls','liga mx']
+                 #'champions league','europa league','conference league']
 
 #%% functions
 def league_mapping(code):
@@ -47,7 +47,10 @@ def league_mapping(code):
 
 def fbref_league_fixtures(season,code):
     code,league = league_mapping(code)
-    table = pd.read_html(f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats')
+    if(code in [24,21,22,14]):
+        table = pd.read_html(f'https://fbref.com/en/comps/{code}/{season}/{season}-{league}-Stats')
+    else:
+        table = pd.read_html(f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats')
     return table
 
 def opp_touches_error(start,end,code):
@@ -57,9 +60,24 @@ def opp_touches_error(start,end,code):
         time.sleep(3.01)
         print(code,season)
         table = fbref_league_fixtures(season,code)
-        ot = table[19]
-        ot.columns = ot.columns.droplevel(0)
-        ot = ot[['Squad','Touches']]
+        try:
+            ot = table[19]
+            ot.columns = ot.columns.droplevel(0)
+            ot = ot[['90s','Squad','Touches']]
+        except KeyError:
+            try:
+                ot = table[21]
+                ot.columns = ot.columns.droplevel(0)
+                ot = ot[['90s','Squad','Touches']]
+            except KeyError:
+                try:
+                    ot = table[27]
+                    ot.columns = ot.columns.droplevel(0)
+                    ot = ot[['90s','Squad','Touches']]
+                except KeyError:
+                    ot = table[29]
+                    ot.columns = ot.columns.droplevel(0)
+                    ot = ot[['90s','Squad','Touches']]
         ot['Season'] = season
         ot['Squad'] = ot['Squad'].str.replace('vs ','')
         all_ot.append(ot)
@@ -341,7 +359,8 @@ def multi_team_links(start,end,code):
 def extract_player_data(convert,target,proj_year):
     df_all = []
     exceptions = pd.read_excel(f'{path}/calibration.xlsx','exceptions')
-    exceptions['yob'] = proj_year - exceptions['Age'] - 1
+    exceptions['yob'] = proj_year - exceptions['Age'] - 1  
+    name_changes = pd.read_excel(f'{path}/calibration.xlsx','name changes')
     for l in valid_leagues:
         df = pd.read_excel(f'{path}/fbref.xlsx',l)
         df = df.drop('Unnamed: 0', axis=1)
@@ -361,6 +380,9 @@ def extract_player_data(convert,target,proj_year):
         df['MP_GK'] *= df['Starts']
         club_gp = df.pivot_table(values=['MP_GK'],index=['club','season'],aggfunc='sum')
         df = df.merge(club_gp,left_on=['club','season'],right_on=['club','season'],how='left')
+        df = df.merge(name_changes,left_on=['Player','Nation','yob','Pos'],right_on=['Player','Nation','yob','Pos'],how='left')
+        df.loc[df['new_name'].notna(), 'Player'] = df['new_name']
+        df.loc[df['Pos'] == 'GK', 'Save%'] = df.loc[df['Pos'] == 'GK', 'Save%'].fillna(0)
         
         if(convert == 1):
             factors = league_conversion_factors(1,proj_year)
@@ -392,6 +414,9 @@ def league_conversion_factors(read_file,proj_year):
                 to_df = df[c[1]]
                 to_df['season+1'] = to_df['season'] + 1
                 #to_df[to_df['Min']>=450]
+                if(ch == 'Save%'):
+                    from_df = from_df[from_df['Pos']=='GK']
+                    to_df = to_df[to_df['Pos']=='GK']
                 
                 df_from_to = to_df.merge(from_df, left_on=['Player','Nation','yob','season'], right_on=['Player','Nation','yob','season+1'])
                 #print("from",c[0],"to",c[1],(df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum()))
@@ -400,14 +425,19 @@ def league_conversion_factors(read_file,proj_year):
                 
                 eqn.loc[r,c[0]] = 1
                 eqn.loc[r,c[1]] = -1
-                if((df_from_to['Min_x'].sum()<1000)|(df_from_to['Min_y'].sum()<1000)|(df_to_from['Min_x'].sum()<1000)|(df_to_from['Min_y'].sum()<1000)):
-                    factor = np.nan
+                #if((df_from_to['Min_x'].sum()<1000)|(df_from_to['Min_y'].sum()<1000)|(df_to_from['Min_x'].sum()<1000)|(df_to_from['Min_y'].sum()<1000)):
+                #    factor = np.nan
+                #else:
+                if(ch in ['Save%','TotCmp%']):
+                    factor = np.log(((df_from_to[f'{ch}_x']*df_from_to['Min_x']).sum()/df_from_to['Min_x'].sum())/((df_from_to[f'{ch}_y']*df_from_to['Min_y']).sum()/df_from_to['Min_y'].sum())) -\
+                         np.log(((df_to_from[f'{ch}_x']*df_to_from['Min_x']).sum()/df_to_from['Min_x'].sum())/((df_to_from[f'{ch}_y']*df_to_from['Min_y']).sum()/df_to_from['Min_y'].sum())) 
                 else:
                     factor = np.log((df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum())) -\
-                             np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
-                    factor = factor/2
-                    tot_mins_sample = df_from_to['Min_x'].sum() + df_from_to['Min_y'].sum() + df_to_from['Min_y'].sum() + df_to_from['Min_x'].sum()
-                    #factor *= tot_mins_sample/(tot_mins_sample + 100000)
+                         np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
+                
+                factor = factor/2
+                tot_mins_sample = df_from_to['Min_x'].sum() + df_from_to['Min_y'].sum() + df_to_from['Min_y'].sum() + df_to_from['Min_x'].sum()
+                #factor *= tot_mins_sample/(tot_mins_sample + 100000)
                 eqn.loc[r,f'{ch} log factor'] = factor
                 eqn.loc[r,f'{ch} Mins'] = tot_mins_sample
                 r+=1
@@ -437,7 +467,8 @@ def league_conversion_factors(read_file,proj_year):
         all_eqn.columns = all_eqn.iloc[0]
         all_eqn = all_eqn.drop('category')
         all_eqn = all_eqn.apply(pd.to_numeric, errors='ignore')
-        all_eqn[['Save%','TotCmp%']] = all_eqn[['Save%','TotCmp%']]/10
+        #assumption, not enough gk transfers across leagues
+        all_eqn['Save%'] = all_eqn['Sh']/4
     return all_eqn
 
 def aging_analysis(read_file,proj_year):
@@ -645,7 +676,7 @@ def lineup_projection(team):
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
-player_stats_raw = multi_team_links(2017,2024,9)
+player_stats_raw = multi_team_links(2017,2024,8)
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
@@ -660,3 +691,6 @@ projections = mean_reversion(2025,'premier league')
 #to identify players whose data has been duplicated due to yob mismatch
 duplicates = projections.pivot_table(values=['season'], index=['Player','Nation','Age'], aggfunc='count')
 duplicates = duplicates[duplicates['season']>1]
+
+#%% points projections
+lineup_projection('Liverpool')
