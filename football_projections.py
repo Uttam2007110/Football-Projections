@@ -239,7 +239,7 @@ def aggregate_stats(df,player_yes):
         df['90s'] = df['Min']/90
         analysis = df[['Player','Nation','Pos','club','Age','season','90s','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP',
                        'Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Age_copy',
-                       'Min%','Starts','Subs','unSub']]
+                       'Min%','Starts','Subs','unSub','Touch%']]
     else: 
         analysis = df[['Squad','season','MP','Pts','GF', 'GA','xG','xGA','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP',
                        'Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']]
@@ -378,11 +378,13 @@ def extract_player_data(convert,target,proj_year):
         df['MP_GK'] = 0
         df.loc[df['Pos']=='GK','MP_GK'] = 1 
         df['MP_GK'] *= df['Starts']
-        club_gp = df.pivot_table(values=['MP_GK'],index=['club','season'],aggfunc='sum')
+        club_gp = df.pivot_table(values=['MP_GK','Touches'],index=['club','season'],aggfunc='sum')
         df = df.merge(club_gp,left_on=['club','season'],right_on=['club','season'],how='left')
         df = df.merge(name_changes,left_on=['Player','Nation','yob','Pos'],right_on=['Player','Nation','yob','Pos'],how='left')
         df.loc[df['new_name'].notna(), 'Player'] = df['new_name']
         df.loc[df['Pos'] == 'GK', 'Save%'] = df.loc[df['Pos'] == 'GK', 'Save%'].fillna(0)
+        df['Touch%'] = (df['Touches_x']/(df['Min']/90))/(df['Touches_y']/df['MP_GK_y'])
+        df.rename(columns={'Touches_x': 'Touches'}, inplace=True)
         
         if(convert == 1):
             factors = league_conversion_factors(1,proj_year)
@@ -527,16 +529,16 @@ def mean_reversion(proj_year,standard):
     
     df['TotCmp%'] = df['TotCmp%'].fillna(coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum())
     df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW',
-        'blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC',
+        'blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC',
                                                                     'Tkl','TklW','blkSh', 'blkPass', 'Int', 'Clr',
-                                                                    'Err','Fls', 'Fld']].fillna(0)
+                                                                    'Err','Fls', 'Fld','Touch%']].fillna(0)
     
     df1 = df.pivot_table(values=['Min', 'Touches', 'o_Touches', 'Sh', 'TotAtt', 'PrgP', 
                                 'Carries', 'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 
                                 'Fls', 'Fld', 'Starts', 'Mn/Start', 'Subs', 'Mn/Sub', 'unSub','MP_GK_y'],
                         index = ['Player', 'club', 'Nation', 'Pos', 'Age', 'season','yob'],
                         aggfunc="sum")
-    df2 = df.pivot_table(values=['Save%', 'TotCmp%'],
+    df2 = df.pivot_table(values=['Save%', 'TotCmp%','Touch%'],
                         index = ['Player', 'club', 'Nation', 'Pos', 'Age', 'season','yob'],
                         aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'Min']))
     df1 = df1.reset_index()
@@ -560,7 +562,7 @@ def mean_reversion(proj_year,standard):
                                 'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld'],
                               index=['Player','Nation','yob'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight']))
-    df_agg2 = df.pivot_table(values=['Save%','TotCmp%'],
+    df_agg2 = df.pivot_table(values=['Save%','TotCmp%','Touch%'],
                               index=['Player','Nation','yob'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight2']))
     pos = df.pivot_table(values=['Pos'], index=['Player','Nation','yob'], aggfunc=lambda x: ','.join(x.unique()))
@@ -572,12 +574,13 @@ def mean_reversion(proj_year,standard):
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt.loc[rows.index, 'weight']))
     avg = df[['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
-             'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']].sum()
+             'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']].sum()
     avg = 600 * avg/df['Min'].sum()
     #percentage stats need to be fixed
     avg['Save%'] = coeffs.loc[coeffs['variable']=='Save%','mean'].sum()
     avg['TotCmp%'] = coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum()
     avg['TklW'] = coeffs.loc[coeffs['variable']=='TklW','mean'].sum()
+    avg['Touch%'] = 0.11
     
     pos = pos.reset_index()
     team = team.reset_index()
@@ -597,7 +600,7 @@ def mean_reversion(proj_year,standard):
     df_agg = pt.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg['TklW'] = 100*df_agg['TklW']/df_agg['Tkl']
     for x in avg.index:
-        if(x not in ['Save%','TotCmp%','TklW']):  df_agg[x] = df_agg[x] + avg[x]
+        if(x not in ['Save%','TotCmp%','TklW','Touch%']):  df_agg[x] = df_agg[x] + avg[x]
         else: df_agg[x] = (df_agg[x]*df_agg['Min'] + avg[x]*600)/(df_agg['Min']+600)
     df_agg['Min'] = df_agg['Min'] + 600
     df_agg = aggregate_stats(df_agg,1)
@@ -615,16 +618,26 @@ def mean_reversion(proj_year,standard):
         projections_copy[f'{v}_x'] *= projections_copy[v] / projections_copy[f'{v}_y']
         
     projections_copy = projections_copy[['Player', 'Nation', 'Pos', 'club', 'Age_x', 'season', 'Min%','Starts','Subs','unSub',
-           'Touches_x', 'o_Touches_x', 'Save%_x', 'Sh_x', 'TotAtt_x', 'TotCmp%_x', 'PrgP_x', 'Carries_x', 'PrgC_x', 
+           'Touch%','Touches_x', 'o_Touches_x', 'Save%_x', 'Sh_x', 'TotAtt_x', 'TotCmp%_x', 'PrgP_x', 'Carries_x', 'PrgC_x', 
            'Tkl_x', 'TklW_x', 'blkSh_x', 'blkPass_x', 'Int_x', 'Clr_x', 'Err_x', 'Fls_x', 'Fld_x']]
     projections_copy.columns = ['Player', 'Nation', 'Pos', 'club', 'Age', 'season', 'Min/G','p(start)','p(sub)','p(unSub)',
-           'Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries', 'PrgC', 
+           'Touch%','Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries', 'PrgC', 
            'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']
     return projections_copy
 
-def lineup_projection(team):
+def lineup_projection(team,custom_lineups,custom_mins):
+    #team='Liverpool'; custom_mins=1
     df = pd.read_excel(f'{path}/projections.xlsx','Sheet1')
-    df = df.drop('Unnamed: 0', axis=1)
+    df = df.drop('Column1', axis=1)
+    squads = pd.read_excel(f'{path}/projections.xlsx','squads')
+    squads = squads.drop('Column1', axis=1)
+    df = pd.merge(df, squads, on=['Player','Nation','Pos','Age'], how='left')
+    if(custom_lineups == 1): df['club_x'] = df['club_y']
+    if(custom_mins == 1): df['Min/G_x'] = df['Min/G_y']
+    df.rename(columns={'club_x': 'club', 'Min/G_x': 'Min/G'}, inplace=True)
+    df.drop(['club_y','Min/G_y'], axis=1, inplace=True) 
+    df['Min/G'] = df['Min/G'].fillna(0)
+    
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
     
@@ -644,6 +657,7 @@ def lineup_projection(team):
         else:
             keepers['Min/G'] *= pow(exp,keepers['rank'])
             exp -= 0.0001
+        keepers['Min/G'] = keepers['Min/G'].clip(upper=1)
     
     exp = 1.0
     while((outfielders['Min/G'].sum() <= 9.9) or (outfielders['Min/G'].sum() >= 10.1)):
@@ -653,7 +667,18 @@ def lineup_projection(team):
         elif(outfielders['Min/G'].sum() >= 10.1):
             outfielders['Min/G'] *= pow(exp,outfielders['rank'])
             exp -= 0.0001
+        outfielders['Min/G'] = outfielders['Min/G'].clip(upper=1)
         #print(outfielders['Min/G'].sum())
+    
+    touches = (outfielders['Min/G']*outfielders['Touches']).sum() + (keepers['Min/G']*keepers['Touches']).sum()
+    opp_touches = (outfielders['Min/G']*outfielders['o_Touches']).sum() + (keepers['Min/G']*keepers['o_Touches']).sum()
+    touch_pct = (outfielders['Min/G']*outfielders['Touch%']).sum() + (keepers['Min/G']*keepers['Touch%']).sum()
+    outfielders['o_Touches'] =  opp_touches/11
+    keepers['o_Touches'] =  opp_touches/11
+    outfielders['Touch%'] /=  touch_pct
+    keepers['Touch%'] /=  touch_pct
+    outfielders['Touches'] =  touches * outfielders['Touch%']
+    keepers['Touches'] =  touches * keepers['Touch%']
     
     measure = []
     for m in ['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW',
@@ -671,6 +696,7 @@ def lineup_projection(team):
     pts *= np.array(coeffs['weight'].to_list()[:-1])
     pts = sum(pts) * coeffs.loc[coeffs['variable']=='pred','stdev'].sum()  + coeffs.loc[coeffs['variable']=='pred','mean'].sum()
     print(team,pts)
+    #print(outfielders[outfielders['Min/G']>0.01][['Player','Min/G']])
 
 #%% extract data
 #extract team stats for multiple leagues and years
@@ -693,4 +719,4 @@ duplicates = projections.pivot_table(values=['season'], index=['Player','Nation'
 duplicates = duplicates[duplicates['season']>1]
 
 #%% points projections
-lineup_projection('Liverpool')
+lineup_projection('Arsenal',0,0) #team, custom lineups, custom mins
