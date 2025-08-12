@@ -20,8 +20,8 @@ from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
-#path = "C:/Users/uttam/Desktop/Sports/football"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
@@ -633,9 +633,10 @@ def mean_reversion(proj_year,standard):
     return projections_copy
 
 def lineup_projection(team,custom_lineups,custom_mins):
-    #team='Liverpool'; custom_mins=1; custom_lineups=1
+    #team='Leeds United'; custom_mins=1; custom_lineups=1
     df = pd.read_excel(f'{path}/projections.xlsx','Sheet1')
     df = df.drop('Column1', axis=1)
+    df['TklW'] = df['TklW'].fillna(60.58)
     squads = pd.read_excel(f'{path}/projections.xlsx','squads')
     squads = squads.drop('Column1', axis=1)
     df = pd.merge(df, squads, on=['Player','Nation','Pos','Age'], how='left')
@@ -694,15 +695,21 @@ def lineup_projection(team,custom_lineups,custom_mins):
               'blkSh','blkPass','Int', 'Clr', 'Err', 'Fls', 'Fld']:
         if(m in ['Touches','o_Touches','Save%']):
             measure.append((outfielders[m] * outfielders['Min/G']).sum() + (keepers[m] * keepers['Min/G']).sum())
-        if(m in ['TotCmp%','TklW']):
-            measure.append(((outfielders[m] * outfielders['Min/G']).sum() + (keepers[m] * keepers['Min/G']).sum())/11)
+        elif(m in ['TotCmp%']):
+            measure.append(((outfielders[m] * outfielders['TotAtt'] * outfielders['Min/G'] * outfielders['Touches']).sum() + (keepers[m] * keepers['TotAtt'] * keepers['Min/G'] * keepers['Touches']).sum())/measure[0])
+        elif(m in ['TklW']):
+            measure.append(((outfielders[m] * outfielders['Tkl'] * outfielders['Min/G'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Tkl'] * keepers['Min/G'] * keepers['o_Touches']).sum())/measure[1])
         elif(m in ['Tkl','blkSh','blkPass','Int', 'Clr', 'Err', 'Fls']):
             measure.append(((outfielders[m] * outfielders['Min/G'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Min/G'] * keepers['o_Touches']).sum())/measure[1])
         elif(m in ['Sh','TotAtt','PrgP','Carries','PrgC','Fld']):
             measure.append(((outfielders[m] * outfielders['Min/G'] * outfielders['Touches']).sum() + (keepers[m] * keepers['Min/G'] * keepers['Touches']).sum())/measure[0])
     
+    measure[5]/= measure[4]
+    measure[10]/= measure[9]
+    #adding dominance and pace which are derived from touches and opp touches
     measure.append(measure[0]/measure[1])
     measure.append(measure[0]+measure[1])
+    
     pts = (np.array(measure[2:]) - np.array(coeffs['mean'].to_list()[:-1])) / np.array(coeffs['stdev'].to_list()[:-1])
     pts *= np.array(coeffs['weight'].to_list()[:-1])
     pts = sum(pts) * coeffs.loc[coeffs['variable']=='pred','stdev'].sum()  + coeffs.loc[coeffs['variable']=='pred','mean'].sum()
@@ -724,7 +731,7 @@ def league_projections(league,custom_lineups,custom_mins):
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
     lg_avg = coeffs.loc[coeffs['variable']=='pred','mean'].sum()
-    table['Points'] *= (lg_avg/table['Points'].mean())
+    #table['Points'] *= (lg_avg/table['Points'].mean())
     return table
 
 #%% extract data
