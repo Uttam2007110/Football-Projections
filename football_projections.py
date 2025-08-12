@@ -24,8 +24,8 @@ path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
 #path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
-                 'brazilian serie a','mls','liga mx']
-                 #'champions league','europa league','conference league']
+                 'brazilian serie a','mls','liga mx',
+                 'champions league','europa league','conference league']
 
 #%% functions
 def league_mapping(code):
@@ -57,7 +57,7 @@ def opp_touches_error(start,end,code):
     all_ot = []
     season = start
     while(season <= end):
-        time.sleep(3.01)
+        time.sleep(6.01)
         print(code,season)
         table = fbref_league_fixtures(season,code)
         try:
@@ -123,11 +123,13 @@ def player_stats(club,code,season,league_code):
     else: #leagues start in summer
         ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats')
     
-    ref = pd.read_html('https://fbref.com/en/squads/943e8050/2023-2024/9/Burnley-Stats-Premier-League')
+    #ref = pd.read_html('https://fbref.com/en/squads/943e8050/2023-2024/9/Burnley-Stats-Premier-League')
     
     basic = ref[0]
     basic.columns = basic.columns.droplevel(0)
-    basic = basic[['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s']]
+    basic = basic[['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s','Gls','PK','PKatt','xG','npxG']]
+    basic.columns = ['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s', 'Gls', 'Gls/90','PK', 'PKatt', 'xG', 'xG/90', 'npxG', 'npxG/90']
+    basic = basic[['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s','Gls','PK','PKatt','xG','npxG']]
     keeper_basic = ref[2]
     keeper_basic.columns = keeper_basic.columns.droplevel(0)
     keeper_basic = keeper_basic[['Player', 'Nation', 'Pos', 'Age','SoTA','Saves','Save%','PKatt', 'PKA', 'PKsv', 'PKm']]
@@ -181,7 +183,7 @@ def player_stats(club,code,season,league_code):
 def team_stats(init_season,end_season,code):
     season = init_season; final = []
     while(season < end_season+1):
-        time.sleep(3.01); print(season)
+        time.sleep(6.01); print(season)
         ref = fbref_league_fixtures(season,code)
         basic = ref[0]
         basic = basic[['Squad', 'MP', 'GF', 'GA','xG', 'xGA' ,'Pts']]
@@ -283,7 +285,7 @@ def regression(df, a):
     analysis = aggregate_stats(df,0)    
     # Generate some synthetic data
     y = analysis['Pts']
-    X = analysis[['Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW','blkSh','blkPass','Int','Clr','Err','Fls','Fld']] #'dominance','pace'
+    X = analysis[['Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW','blkSh','blkPass','Int','Clr','Err','Fls','Fld','dominance','pace']]
     #normalization
     y_mean = y.mean(); y_std = y.std()
     X_mean = X.mean(); X_std = X.std()
@@ -342,7 +344,7 @@ def multi_team_links(start,end,code):
     while(season<=end):
         links = fbref_team_ids(season,code)
         for l in links['team'].index:
-            time.sleep(3.01)
+            time.sleep(6.01)
             t = links.iloc[l]['team']
             c = links.iloc[l]['code']
             s = links.iloc[l]['season']
@@ -470,7 +472,7 @@ def league_conversion_factors(read_file,proj_year):
         all_eqn = all_eqn.drop('category')
         all_eqn = all_eqn.apply(pd.to_numeric, errors='ignore')
         #assumption, not enough gk transfers across leagues
-        all_eqn['Save%'] = all_eqn['Sh']/4
+        #all_eqn['Save%'] = all_eqn['Sh']/4
     return all_eqn
 
 def aging_analysis(read_file,proj_year):
@@ -573,14 +575,19 @@ def mean_reversion(proj_year,standard):
     pt = pt.pivot_table(values=['Min%','Starts','Subs','unSub'], 
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt.loc[rows.index, 'weight']))
-    avg = df[['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
-             'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']].sum()
-    avg = 600 * avg/df['Min'].sum()
+    avg = pd.read_excel(f'{path}/fbref.xlsx',standard)
+    avg = avg[['Min','Touches','o_Touches','Save%','Sh','TotAtt','PrgP','Carries','PrgC',
+               'Tkl','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']].sum()
+    #avg = df[['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
+    #         'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']].sum()
+    for x in avg.index:
+        if(x != 'Min'): avg[x] = 600 * avg[x].sum()/avg['Min'].sum()
     #percentage stats need to be fixed
     avg['Save%'] = coeffs.loc[coeffs['variable']=='Save%','mean'].sum()
     avg['TotCmp%'] = coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum()
     avg['TklW'] = coeffs.loc[coeffs['variable']=='TklW','mean'].sum()
-    avg['Touch%'] = 0.11
+    avg['Touch%'] = 1/11
+    avg = avg.drop(labels=['Min'])
     
     pos = pos.reset_index()
     team = team.reset_index()
@@ -626,7 +633,7 @@ def mean_reversion(proj_year,standard):
     return projections_copy
 
 def lineup_projection(team,custom_lineups,custom_mins):
-    #team='Liverpool'; custom_mins=1
+    #team='Liverpool'; custom_mins=1; custom_lineups=1
     df = pd.read_excel(f'{path}/projections.xlsx','Sheet1')
     df = df.drop('Column1', axis=1)
     squads = pd.read_excel(f'{path}/projections.xlsx','squads')
@@ -670,6 +677,8 @@ def lineup_projection(team,custom_lineups,custom_mins):
         outfielders['Min/G'] = outfielders['Min/G'].clip(upper=1)
         #print(outfielders['Min/G'].sum())
     
+    keepers['Min/G'] = keepers['Min/G']/keepers['Min/G'].sum()
+    outfielders['Min/G'] = 10*outfielders['Min/G']/outfielders['Min/G'].sum()
     touches = (outfielders['Min/G']*outfielders['Touches']).sum() + (keepers['Min/G']*keepers['Touches']).sum()
     opp_touches = (outfielders['Min/G']*outfielders['o_Touches']).sum() + (keepers['Min/G']*keepers['o_Touches']).sum()
     touch_pct = (outfielders['Min/G']*outfielders['Touch%']).sum() + (keepers['Min/G']*keepers['Touch%']).sum()
@@ -692,21 +701,42 @@ def lineup_projection(team,custom_lineups,custom_mins):
         elif(m in ['Sh','TotAtt','PrgP','Carries','PrgC','Fld']):
             measure.append(((outfielders[m] * outfielders['Min/G'] * outfielders['Touches']).sum() + (keepers[m] * keepers['Min/G'] * keepers['Touches']).sum())/measure[0])
     
+    measure.append(measure[0]/measure[1])
+    measure.append(measure[0]+measure[1])
     pts = (np.array(measure[2:]) - np.array(coeffs['mean'].to_list()[:-1])) / np.array(coeffs['stdev'].to_list()[:-1])
     pts *= np.array(coeffs['weight'].to_list()[:-1])
     pts = sum(pts) * coeffs.loc[coeffs['variable']=='pred','stdev'].sum()  + coeffs.loc[coeffs['variable']=='pred','mean'].sum()
-    print(team,pts)
+    #print(team,pts)
     #print(outfielders[outfielders['Min/G']>0.01][['Player','Min/G']])
+    return pts
+    
+def league_projections(league,custom_lineups,custom_mins):
+    table = [['Team','Points']]
+    team_list = pd.read_excel(f'{path}/projections.xlsx','teams')
+    team_list = list(team_list[league])
+    for t in team_list:
+        pts = lineup_projection(t,custom_lineups,custom_mins)
+        table.append([t,pts])
+    table = pd.DataFrame(table)
+    table.columns = table.iloc[0];table = table.drop(0)
+    table = table.apply(pd.to_numeric, errors='ignore')
+    
+    coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
+    coeffs = coeffs.drop('Unnamed: 0', axis=1)
+    lg_avg = coeffs.loc[coeffs['variable']=='pred','mean'].sum()
+    table['Points'] *= (lg_avg/table['Points'].mean())
+    return table
 
 #%% extract data
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
-player_stats_raw = multi_team_links(2017,2024,8)
+player_stats_raw = multi_team_links(2021,2024,882)
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
 #team regression analysis
+#t_stats = multi_leagues(1)
 #summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001)
 #player projection data
 factors = league_conversion_factors(0,2025)
@@ -719,4 +749,5 @@ duplicates = projections.pivot_table(values=['season'], index=['Player','Nation'
 duplicates = duplicates[duplicates['season']>1]
 
 #%% points projections
-lineup_projection('Arsenal',0,0) #team, custom lineups, custom mins
+#lineup_projection('Chelsea',0,0) #team, custom lineups, custom mins
+table = league_projections('premier league',1,1) #team, custom lineups, custom mins
