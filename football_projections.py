@@ -15,13 +15,14 @@ from itertools import combinations
 from sklearn import linear_model
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
+from scipy.stats import poisson
 
 from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
-path = "C:/Users/uttam/Desktop/Sports/football"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+#path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
@@ -280,11 +281,11 @@ def aggregate_stats(df,player_yes):
         analysis.drop(['Touches','o_Touches'], axis=1, inplace=True)
     return analysis
 
-def regression(df, a):
+def regression(df, a, target):
     df.reset_index(drop=True, inplace=True)
     analysis = aggregate_stats(df,0)    
     # Generate some synthetic data
-    y = analysis['Pts']
+    y = analysis[target]
     X = analysis[['Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW','blkSh','blkPass','Int','Clr','Err','Fls','Fld','dominance','pace']]
     #normalization
     y_mean = y.mean(); y_std = y.std()
@@ -310,7 +311,7 @@ def regression(df, a):
     
     analysis['pred'] = lasso_model.predict(X)
     analysis['pred'] = (analysis['pred']*y_std) + y_mean
-    s = analysis[['Squad','season','Pts','GD','xGD','pred']]
+    s = analysis[['Squad','season',target,'pred']]
     
     data = pd.DataFrame(columns=['variable','weight','mean','stdev'])
     X_mean = pd.DataFrame(X_mean)
@@ -400,6 +401,7 @@ def league_conversion_factors(read_file,proj_year):
     if(read_file == 1):
         all_eqn = pd.read_excel(f'{path}/calibration.xlsx','conversions',index_col=0)
     else:
+        #proj_year=2025
         df,leagues = extract_player_data(0,'',proj_year)
         combos = list(combinations(range(0,len(df)), 2))
         categories = ['Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries',
@@ -435,6 +437,21 @@ def league_conversion_factors(read_file,proj_year):
                 if(ch in ['Save%','TotCmp%']):
                     factor = np.log(((df_from_to[f'{ch}_x']*df_from_to['Min_x']).sum()/df_from_to['Min_x'].sum())/((df_from_to[f'{ch}_y']*df_from_to['Min_y']).sum()/df_from_to['Min_y'].sum())) -\
                          np.log(((df_to_from[f'{ch}_x']*df_to_from['Min_x']).sum()/df_to_from['Min_x'].sum())/((df_to_from[f'{ch}_y']*df_to_from['Min_y']).sum()/df_to_from['Min_y'].sum())) 
+                elif(ch in ['Touches','o_Touches','Sh', 'TotAtt', 'PrgP', 'Carries', 'PrgC', 
+                            'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']):
+                    from_df_team = pd.pivot_table(from_df,values=[ch,'Min'],index=['club','season','season+1'],aggfunc="sum")
+                    from_df_team = from_df_team.reset_index()
+                    to_df_team = pd.pivot_table(to_df,values=[ch,'Min'],index=['club','season','season+1'],aggfunc="sum")
+                    to_df_team = to_df_team.reset_index()
+                    
+                    df_from_to_club = to_df_team.merge(from_df_team, left_on=['club','season'], right_on=['club','season+1'])
+                    df_to_from_club = from_df_team.merge(to_df_team, left_on=['club','season'], right_on=['club','season+1'])
+                    
+                    factor = np.log((df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum())) -\
+                         np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum()))
+                         
+                    factor += 0.5*(np.log((df_from_to_club[f'{ch}_x'].sum()/df_from_to_club['Min_x'].sum())/(df_from_to_club[f'{ch}_y'].sum()/df_from_to_club['Min_y'].sum())) -\
+                         np.log((df_to_from_club[f'{ch}_x'].sum()/df_to_from_club['Min_x'].sum())/(df_to_from_club[f'{ch}_y'].sum()/df_to_from_club['Min_y'].sum())))
                 else:
                     factor = np.log((df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum())) -\
                          np.log((df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum())) 
@@ -472,7 +489,7 @@ def league_conversion_factors(read_file,proj_year):
         all_eqn = all_eqn.drop('category')
         all_eqn = all_eqn.apply(pd.to_numeric, errors='ignore')
         #assumption, not enough gk transfers across leagues
-        #all_eqn['Save%'] = all_eqn['Sh']/4
+        all_eqn['Save%'] = all_eqn['Sh']/2
     return all_eqn
 
 def aging_analysis(read_file,proj_year):
@@ -606,6 +623,7 @@ def mean_reversion(proj_year,standard):
     df_agg = age.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pt.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg['TklW'] = 100*df_agg['TklW']/df_agg['Tkl']
+    df_agg['TklW'] = df_agg['TklW'].fillna(0)
     for x in avg.index:
         if(x not in ['Save%','TotCmp%','TklW','Touch%']):  df_agg[x] = df_agg[x] + avg[x]
         else: df_agg[x] = (df_agg[x]*df_agg['Min'] + avg[x]*600)/(df_agg['Min']+600)
@@ -632,7 +650,7 @@ def mean_reversion(proj_year,standard):
            'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']
     return projections_copy
 
-def lineup_projection(team,custom_lineups,custom_mins):
+def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     #team='Leeds United'; custom_mins=1; custom_lineups=1
     df = pd.read_excel(f'{path}/projections.xlsx','Sheet1')
     df = df.drop('Column1', axis=1)
@@ -648,6 +666,10 @@ def lineup_projection(team,custom_lineups,custom_mins):
     
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
+    gf = pd.read_excel(f'{path}/calibration.xlsx','GF')
+    gf = gf.drop('Unnamed: 0', axis=1)
+    ga = pd.read_excel(f'{path}/calibration.xlsx','GA')
+    ga = ga.drop('Unnamed: 0', axis=1)
     
     df_team = df[df['club']==team]
     keepers = df_team[df_team['Pos']=='GK']    
@@ -713,17 +735,24 @@ def lineup_projection(team,custom_lineups,custom_mins):
     pts = (np.array(measure[2:]) - np.array(coeffs['mean'].to_list()[:-1])) / np.array(coeffs['stdev'].to_list()[:-1])
     pts *= np.array(coeffs['weight'].to_list()[:-1])
     pts = sum(pts) * coeffs.loc[coeffs['variable']=='pred','stdev'].sum()  + coeffs.loc[coeffs['variable']=='pred','mean'].sum()
+    gf_t = (np.array(measure[2:]) - np.array(gf['mean'].to_list()[:-1])) / np.array(gf['stdev'].to_list()[:-1])
+    gf_t *= np.array(gf['weight'].to_list()[:-1])
+    gf_t = sum(gf_t) * gf.loc[gf['variable']=='pred','stdev'].sum()  + gf.loc[gf['variable']=='pred','mean'].sum()
+    ga_t = (np.array(measure[2:]) - np.array(ga['mean'].to_list()[:-1])) / np.array(ga['stdev'].to_list()[:-1])
+    ga_t *= np.array(ga['weight'].to_list()[:-1])
+    ga_t = sum(ga_t) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
     #print(team,pts)
     #print(outfielders[outfielders['Min/G']>0.01][['Player','Min/G']])
-    return pts
+    if(return_all_stats == 1): return measure,pts
+    else: return (pts,gf_t,ga_t)
     
-def league_projections(league,custom_lineups,custom_mins):
-    table = [['Team','Points']]
+def league_projections(league,custom_lineups,custom_mins):    
+    table = [['Team','Points','GF/90','GA/90']]
     team_list = pd.read_excel(f'{path}/projections.xlsx','teams')
     team_list = list(team_list[league])
     for t in team_list:
-        pts = lineup_projection(t,custom_lineups,custom_mins)
-        table.append([t,pts])
+        pts,gf,ga = lineup_projection(t,custom_lineups,custom_mins,0)
+        table.append([t,pts,gf,ga])
     table = pd.DataFrame(table)
     table.columns = table.iloc[0];table = table.drop(0)
     table = table.apply(pd.to_numeric, errors='ignore')
@@ -731,8 +760,51 @@ def league_projections(league,custom_lineups,custom_mins):
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
     lg_avg = coeffs.loc[coeffs['variable']=='pred','mean'].sum()
-    #table['Points'] *= (lg_avg/table['Points'].mean())
+    print('projection to expectation delta',lg_avg/table['Points'].mean())
+    table['Points'] *= (lg_avg/table['Points'].mean())
+    table['GD/90'] = table['GF/90'] - table['GA/90']
     return table
+
+def h2h(t1,t2,custom_lineups,custom_mins):
+    #t1='Liverpool';t2='Bournemouth';custom_lineups=1;custom_mins=1
+    m1,p1,gf1,ga1 = lineup_projection(t1,custom_lineups,custom_mins,1)
+    m2,p2,gf2,ga2 = lineup_projection(t2,custom_lineups,custom_mins,1)
+    
+    gf = pd.read_excel(f'{path}/calibration.xlsx','GF')
+    gf = gf.drop('Unnamed: 0', axis=1)
+    ga = pd.read_excel(f'{path}/calibration.xlsx','GA')
+    ga = ga.drop('Unnamed: 0', axis=1)
+    
+    gf1 = (np.array(m1[2:]) - np.array(gf['mean'].to_list()[:-1])) / np.array(gf['stdev'].to_list()[:-1])
+    gf1 *= np.array(gf['weight'].to_list()[:-1])
+    gf1 = sum(gf1) * gf.loc[gf['variable']=='pred','stdev'].sum()  + gf.loc[gf['variable']=='pred','mean'].sum()  
+    ga1 = (np.array(m1[2:]) - np.array(ga['mean'].to_list()[:-1])) / np.array(ga['stdev'].to_list()[:-1])
+    ga1 *= np.array(ga['weight'].to_list()[:-1])
+    ga1 = sum(ga1) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
+    
+    gf2 = (np.array(m2[2:]) - np.array(gf['mean'].to_list()[:-1])) / np.array(gf['stdev'].to_list()[:-1])
+    gf2 *= np.array(gf['weight'].to_list()[:-1])
+    gf2 = sum(gf2) * gf.loc[gf['variable']=='pred','stdev'].sum()  + gf.loc[gf['variable']=='pred','mean'].sum()  
+    ga2 = (np.array(m2[2:]) - np.array(ga['mean'].to_list()[:-1])) / np.array(ga['stdev'].to_list()[:-1])
+    ga2 *= np.array(ga['weight'].to_list()[:-1])
+    ga2 = sum(ga2) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
+    
+    avg_goals = (gf.loc[gf['variable']=='pred','mean'].mean() + ga.loc[gf['variable']=='pred','mean'].mean())/2
+    home_adv = 0.1 # research this in detail
+    lg_avg_touches = 600 #check if this is 600 or 625
+    
+    t1_g = (1+home_adv) * gf1 * ga2 / avg_goals
+    t2_g = (1-home_adv) * gf2 * ga1 / avg_goals
+    
+    t1_cs = poisson.pmf(0, t2_g)
+    t2_cs = poisson.pmf(0, t1_g)
+      
+    t1_touches = (1+home_adv)*m1[0]*m2[1]/lg_avg_touches
+    t2_touches = (1+home_adv)*m2[0]*m1[1]/lg_avg_touches
+    
+    print(t1,'goals',round(t1_g,2),'CS%',round(100*t1_cs,2))
+    print(t2,'goals',round(t2_g,2),'CS%',round(100*t2_cs,2))
+    
 
 #%% extract data
 #extract team stats for multiple leagues and years
@@ -744,10 +816,10 @@ player_stats_raw = multi_team_links(2021,2024,882)
 #%% analyze
 #team regression analysis
 #t_stats = multi_leagues(1)
-#summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001)
+#summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001,'Pts') # target variables can be - GF, GA, xG, xGA, GD, xGD, Pts
 #player projection data
 factors = league_conversion_factors(0,2025)
-aging = aging_analysis(1,2025)
+aging = aging_analysis(0,2025)
 
 #%% generate player projections
 projections = mean_reversion(2025,'premier league')
@@ -756,5 +828,6 @@ duplicates = projections.pivot_table(values=['season'], index=['Player','Nation'
 duplicates = duplicates[duplicates['season']>1]
 
 #%% points projections
-#lineup_projection('Chelsea',0,0) #team, custom lineups, custom mins
+#lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 table = league_projections('premier league',1,1) #team, custom lineups, custom mins
+#h2h('Liverpool','Manchester City',0,0)
