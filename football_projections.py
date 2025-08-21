@@ -16,6 +16,7 @@ from sklearn import linear_model
 import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from scipy.stats import poisson
+from scipy.stats import skellam
 
 from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
@@ -27,6 +28,9 @@ valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
                  'champions league','europa league','conference league']
+
+proj_year = 2025
+standard = 'premier league'
 
 #%% functions
 def league_mapping(code):
@@ -240,12 +244,12 @@ def team_stats(init_season,end_season,code):
 def aggregate_stats(df,player_yes):
     if(player_yes == 1):
         df['90s'] = df['Min']/90
-        analysis = df[['Player','Nation','Pos','club','Age','season','90s','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP',
-                       'Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Age_copy',
-                       'Min%','Starts','Subs','unSub','Touch%']]
+        analysis = df[['Player','Nation','Pos','club','Age','season','90s','Touches','o_Touches','Save%','PKsv%','Goals%','PKatt%','Sh','SoT','PKcon%',
+                       'TotAtt','TotCmp%','PrgP','Assist%','CC','Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld',
+                       'Age_copy','Min%','Starts','Subs','unSub','Touch%','Mn/Start','Mn/Sub','CrdY','CrdR']]
     else: 
-        analysis = df[['Squad','season','MP','Pts','GF', 'GA','xG','xGA','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP',
-                       'Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']]
+        analysis = df[['Squad','season','MP','Pts','GF', 'GA','xG','xGA','Ast','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP',
+                       'Carries','PrgC','Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls','Fld']]
     
     analysis['PrgP'] = analysis['PrgP']/analysis['TotAtt']
     analysis['PrgC'] = analysis['PrgC']/analysis['Carries']
@@ -262,6 +266,10 @@ def aggregate_stats(df,player_yes):
     analysis['Fld'] = analysis['Fld']/analysis['Touches']
     if(player_yes == 1):
         analysis['Tkl'] = analysis['Tkl']/analysis['o_Touches']
+        analysis['SoT'] = analysis['SoT']/analysis['Touches']
+        analysis['CC'] = analysis['CC']/analysis['Touches']
+        analysis['CrdY'] = analysis['CrdY']/analysis['o_Touches']
+        analysis['CrdR'] = analysis['CrdR']/analysis['o_Touches']
         analysis['Touches'] = analysis['Touches']/analysis['90s']
         analysis['o_Touches'] = analysis['o_Touches']/analysis['90s']
     else:
@@ -272,6 +280,7 @@ def aggregate_stats(df,player_yes):
         analysis['Pts'] = analysis['Pts']/analysis['MP']
         analysis['GF'] = analysis['GF']/analysis['MP']
         analysis['GA'] = analysis['GA']/analysis['MP']
+        analysis['Ast'] = analysis['Ast']/analysis['MP']
         analysis['xG'] = analysis['xG']/analysis['MP']
         analysis['xGA'] = analysis['xGA']/analysis['MP']
         analysis['GD'] = analysis['GF'] - analysis['GA']
@@ -359,7 +368,15 @@ def multi_team_links(start,end,code):
     raw = pd.concat(raw)
     return raw
 
-def extract_player_data(convert,target,proj_year):
+def new_season_data():
+    for l in valid_leagues:
+        league_current = multi_team_links(proj_year-1,proj_year-1,9)
+        league = pd.read_excel(f'{path}/fbref.xlsx',l)
+        league = league[league['season']<proj_year-1]
+        league = pd.concat([league,league_current])
+        #write to file
+
+def extract_player_data(convert,target):
     df_all = []
     exceptions = pd.read_excel(f'{path}/calibration.xlsx','exceptions')
     exceptions['yob'] = proj_year - exceptions['Age'] - 1  
@@ -367,8 +384,10 @@ def extract_player_data(convert,target,proj_year):
     for l in valid_leagues:
         df = pd.read_excel(f'{path}/fbref.xlsx',l)
         df = df.drop('Unnamed: 0', axis=1)
+        df['CC'] = df['Ast'] + df['KP']
         df = df[['Player','club','Nation','Pos','Age','season','Min','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
-                 'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Starts', 'Mn/Start', 'Subs', 'Mn/Sub', 'unSub']]
+                 'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Starts', 'Mn/Start', 'Subs', 'Mn/Sub', 'unSub', 'Gls', 'PK',
+                 'PKatt_x','SoT','Ast','CC', 'PKatt_y', 'PKA', 'PKsv', 'PKm','CrdY','CrdR']]
         df['yob'] = df['season'] - df['Age']
         if(l in ['brazilian serie a','mls']): 
             df['yob'] -= 1
@@ -381,31 +400,38 @@ def extract_player_data(convert,target,proj_year):
         df['MP_GK'] = 0
         df.loc[df['Pos']=='GK','MP_GK'] = 1 
         df['MP_GK'] *= df['Starts']
-        club_gp = df.pivot_table(values=['MP_GK','Touches'],index=['club','season'],aggfunc='sum')
+        df['npG'] = df['Gls'] - df['PK']
+        club_gp = df.pivot_table(values=['MP_GK','Touches','npG','Ast','PKatt_x'],index=['club','season'],aggfunc='sum')
         df = df.merge(club_gp,left_on=['club','season'],right_on=['club','season'],how='left')
         df = df.merge(name_changes,left_on=['Player','Nation','yob','Pos'],right_on=['Player','Nation','yob','Pos'],how='left')
         df.loc[df['new_name'].notna(), 'Player'] = df['new_name']
         df.loc[df['Pos'] == 'GK', 'Save%'] = df.loc[df['Pos'] == 'GK', 'Save%'].fillna(0)
         df['Touch%'] = (df['Touches_x']/(df['Min']/90))/(df['Touches_y']/df['MP_GK_y'])
+        df['Goals%'] = (df['npG_x']/(df['Min']/90))/(df['npG_y']/df['MP_GK_y'])
+        df['Assist%'] = (df['Ast_x']/(df['Min']/90))/(df['Ast_y']/df['MP_GK_y'])
+        df['PKatt%'] = (df['PKatt_x_x']/(df['Min']/90))/(df['PKatt_x_y']/df['MP_GK_y'])
+        #df['PKsv%'] = df['PKsv']/df['PKatt_y']
         df.rename(columns={'Touches_x': 'Touches'}, inplace=True)
         
         if(convert == 1):
-            factors = league_conversion_factors(1,proj_year)
+            factors = league_conversion_factors(1)
             f = np.exp(factors.loc[l] - factors.loc[target])
             df[f.index] = df[f.index] * f.values
+            #use the PrgP factor for Assists and chances created
+            df['CC'] *= f['PrgP']
+            df['SoT'] *= f['Sh']
             
         df_all.append(df)    
     return df_all,valid_leagues
     
-def league_conversion_factors(read_file,proj_year):
+def league_conversion_factors(read_file):
     if(read_file == 1):
         all_eqn = pd.read_excel(f'{path}/calibration.xlsx','conversions',index_col=0)
     else:
-        #proj_year=2025
-        df,leagues = extract_player_data(0,'',proj_year)
+        df,leagues = extract_player_data(0,'')
         combos = list(combinations(range(0,len(df)), 2))
         categories = ['Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries',
-                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']
+                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld', 'CrdY', 'CrdR']
         all_eqn = [['category'] + leagues]
         
         for ch in categories:
@@ -438,7 +464,7 @@ def league_conversion_factors(read_file,proj_year):
                     factor = np.log(((df_from_to[f'{ch}_x']*df_from_to['Min_x']).sum()/df_from_to['Min_x'].sum())/((df_from_to[f'{ch}_y']*df_from_to['Min_y']).sum()/df_from_to['Min_y'].sum())) -\
                          np.log(((df_to_from[f'{ch}_x']*df_to_from['Min_x']).sum()/df_to_from['Min_x'].sum())/((df_to_from[f'{ch}_y']*df_to_from['Min_y']).sum()/df_to_from['Min_y'].sum())) 
                 elif(ch in ['Touches','o_Touches','Sh', 'TotAtt', 'PrgP', 'Carries', 'PrgC', 
-                            'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']):
+                            'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld', 'CrdY', 'CrdR']):
                     from_df_team = pd.pivot_table(from_df,values=[ch,'Min'],index=['club','season','season+1'],aggfunc="sum")
                     from_df_team = from_df_team.reset_index()
                     to_df_team = pd.pivot_table(to_df,values=[ch,'Min'],index=['club','season','season+1'],aggfunc="sum")
@@ -489,20 +515,20 @@ def league_conversion_factors(read_file,proj_year):
         all_eqn = all_eqn.drop('category')
         all_eqn = all_eqn.apply(pd.to_numeric, errors='ignore')
         #assumption, not enough gk transfers across leagues
-        all_eqn['Save%'] = all_eqn['Sh']/2
+        #all_eqn['Save%'] = all_eqn['Sh']/2
     return all_eqn
 
-def aging_analysis(read_file,proj_year):
+def aging_analysis(read_file):
     if(read_file == 1):
         df_all = pd.read_excel(f'{path}/calibration.xlsx','aging')
     else:
-        df,leagues = extract_player_data(1,'premier league',proj_year)
+        df,leagues = extract_player_data(1,standard)
         df = pd.concat(df)
         df = df.reset_index(drop=True)
         df = df[df['Pos']!='GK']
         df = df[df['Min']>450]
         categories = ['Touches', 'o_Touches', 'Sh', 'TotAtt', 'PrgP', 'Carries',
-                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']
+                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld','CrdY', 'CrdR']
         df_all = []
         for key in categories:
             df2 = df[['Age', 'season', 'Min',key]]
@@ -529,7 +555,7 @@ def aging_analysis(read_file,proj_year):
         df_all['Save%'] = df_all['o_Touches']
         df_all['TotCmp%'] = df_all['TotAtt']
         df_all = df_all[['Age','Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries',
-                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']]
+                      'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld','CrdY', 'CrdR']]
     return df_all
 
 def keep_unique_substrings(row):
@@ -537,51 +563,58 @@ def keep_unique_substrings(row):
     unique_substrings = list(dict.fromkeys(substrings))  # Remove duplicates while preserving order
     return ','.join(unique_substrings)
 
-def mean_reversion(proj_year,standard):
-    #proj_year = 2025; standard = 'premier league'
-    df,leagues = extract_player_data(1,standard,proj_year)
+def mean_reversion():
+    df,leagues = extract_player_data(1,standard)
     df = pd.concat(df)
     df = df.reset_index(drop=True)
+    df['Mn/Sub'] *= df['Subs']/(df['Subs']+df['unSub'])
     
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
     
     df['TotCmp%'] = df['TotCmp%'].fillna(coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum())
-    df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW',
-        'blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC',
-                                                                    'Tkl','TklW','blkSh', 'blkPass', 'Int', 'Clr',
-                                                                    'Err','Fls', 'Fld','Touch%']].fillna(0)
-    
-    df1 = df.pivot_table(values=['Min', 'Touches', 'o_Touches', 'Sh', 'TotAtt', 'PrgP', 
-                                'Carries', 'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 
-                                'Fls', 'Fld', 'Starts', 'Mn/Start', 'Subs', 'Mn/Sub', 'unSub','MP_GK_y'],
-                        index = ['Player', 'club', 'Nation', 'Pos', 'Age', 'season','yob'],
+    df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW','blkSh',
+        'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%', 'Goals%', 'Assist%',
+        'PKatt%','PK','PKatt_x_x', 'SoT', 'CC','PKsv','PKatt_y','CrdY','CrdR','Mn/Start','Mn/Sub']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW',
+                                                                                 'blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%', 
+                                                                                 'Goals%', 'Assist%','PKatt%', 'PK','PKatt_x_x', 'SoT', 'CC',
+                                                                                 'PKsv','PKatt_y','CrdY','CrdR','Mn/Start','Mn/Sub']].fillna(0)
+                                                                                                    
+    #df['PKsv%'] = df['PKsv']/df['PKatt_y']
+    df1 = df.pivot_table(values=['Min', 'Touches', 'o_Touches', 'Sh', 'TotAtt', 'PrgP', 'Carries', 'PrgC', 'Tkl', 'TklW', 
+                                 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld', 'Starts', 'Subs', 
+                                 'unSub','MP_GK_y', 'SoT','CC', 'PK', 'PKatt_x_x','PKsv','PKatt_y','CrdY','CrdR'],
+                        index = ['Player', 'club', 'Nation', 'Age', 'season','yob'],
                         aggfunc="sum")
-    df2 = df.pivot_table(values=['Save%', 'TotCmp%','Touch%'],
-                        index = ['Player', 'club', 'Nation', 'Pos', 'Age', 'season','yob'],
+    df2 = df.pivot_table(values=['Save%', 'TotCmp%','Touch%','Goals%', 'Assist%','PKatt%','Mn/Start','Mn/Sub'],
+                        index = ['Player', 'club', 'Nation', 'Age', 'season','yob'],
                         aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'Min']))
+    df_pos = df.pivot_table(values=['Pos'], index=['Player', 'club', 'Nation', 'Age', 'season','yob'], aggfunc=lambda x: ','.join(x.unique()))
     df1 = df1.reset_index()
     df2 = df2.reset_index()
+    df_pos = df_pos.reset_index()
     df = df1.merge(df2)
+    df = df.merge(df_pos)
     
     df['Min%'] = (df['Min']/90)/df['MP_GK_y']
     df['Starts'] = df['Starts']/df['MP_GK_y']
     df['Subs'] = df['Subs']/df['MP_GK_y']
     df['unSub'] = df['unSub']/df['MP_GK_y']
     
-    pt = df.pivot_table(values=['Min%','Starts','Subs','unSub'],
+    pt = df.pivot_table(values=['Min%','Starts','Subs','unSub','Mn/Start','Mn/Sub'],
                         index = ['Player','Nation','club','season','yob','Pos'],
                         aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'MP_GK_y']))
     pt = pt.reset_index()
     pt['weight'] = pow(2/3,proj_year-pt['season'])
-    
+    pt['weight2'] = pow(2/3,proj_year-pt['season']) * pt['Min%']
     df['weight'] = pow(2/3,proj_year-df['season'])
     df['weight2'] = pow(2/3,proj_year-df['season']) * df['Min']
     df_agg = df.pivot_table(values=['Min','Touches','o_Touches','Sh','TotAtt','PrgP','Carries','PrgC',
-                                'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld'],
+                                    'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld',
+                                    'SoT', 'CC', 'PK', 'PKatt_x_x','PKsv','PKatt_y','CrdY','CrdR'],
                               index=['Player','Nation','yob'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight']))
-    df_agg2 = df.pivot_table(values=['Save%','TotCmp%','Touch%'],
+    df_agg2 = df.pivot_table(values=['Save%','TotCmp%','Touch%','Goals%','Assist%','PKatt%'],
                               index=['Player','Nation','yob'], 
                               aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'weight2']))
     pos = df.pivot_table(values=['Pos'], index=['Player','Nation','yob'], aggfunc=lambda x: ','.join(x.unique()))
@@ -589,21 +622,39 @@ def mean_reversion(proj_year,standard):
     team.columns = team.columns.droplevel(0)
     age = df.pivot_table(values=['Age','season'], index=['Player','Nation','yob'], aggfunc='max')
     #review this
+    pt2 = pt.copy()
     pt = pt.pivot_table(values=['Min%','Starts','Subs','unSub'], 
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt.loc[rows.index, 'weight']))
+    pt2 = pt2[pt2['season']>2017]
+    pt2[['Mn/Start','Mn/Sub']] = pt2[['Mn/Start','Mn/Sub']].fillna(0)
+    pt2 = pt2.pivot_table(values=['Mn/Start','Mn/Sub'], 
+                        index=['Player','Nation','yob'], 
+                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'weight2']))
     avg = pd.read_excel(f'{path}/fbref.xlsx',standard)
+    avg['CC'] = avg['Ast'] + avg['KP']
+    avg_save_pct = 100*avg['Saves'].sum()/avg['SoTA'].sum() 
+    avg_pk_save_pct = 100*avg['PKsv'].sum()/avg['PKatt_y'].sum()
+    avg_tklw = 100*avg['TklW'].sum()/avg['Tkl'].sum()
+    avg_tot_cmp = 100*avg['TotCmp'].sum()/avg['TotAtt'].sum()
+    avg_pk_con = 100*avg['PK'].sum()/avg['PKatt_x'].sum()
     avg = avg[['Min','Touches','o_Touches','Save%','Sh','TotAtt','PrgP','Carries','PrgC',
-               'Tkl','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']].sum()
+               'Tkl','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld', 'CC','SoT','CrdY','CrdR']].sum()
     #avg = df[['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
     #         'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%']].sum()
     for x in avg.index:
         if(x != 'Min'): avg[x] = 600 * avg[x].sum()/avg['Min'].sum()
     #percentage stats need to be fixed
-    avg['Save%'] = coeffs.loc[coeffs['variable']=='Save%','mean'].sum()
-    avg['TotCmp%'] = coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum()
-    avg['TklW'] = coeffs.loc[coeffs['variable']=='TklW','mean'].sum()
+    avg['Save%'] = avg_save_pct
+    avg['PKsv%'] = avg_pk_save_pct
+    avg['TotCmp%'] = avg_tot_cmp
+    avg['TklW'] = avg_tklw
+    avg['PKcon%'] = avg_pk_con
     avg['Touch%'] = 1/11
+    avg['Goals%'] = 1/11
+    avg['Assist%'] = 1/11
+    avg['Mn/Start'] = pt2['Mn/Start'].mean()
+    avg['Mn/Sub'] = pt2['Mn/Sub'].mean()
     avg = avg.drop(labels=['Min'])
     
     pos = pos.reset_index()
@@ -616,38 +667,53 @@ def mean_reversion(proj_year,standard):
     age['season'] = proj_year
     df_agg = df_agg.reset_index()
     df_agg2 = df_agg2.reset_index()
+    #df_agg2['PKsv%'] *= 100 
     pt = pt.reset_index()
+    pt2 = pt2.reset_index()
     df_agg = df_agg2.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pos.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = team.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = age.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pt.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
+    df_agg = pt2.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg['TklW'] = 100*df_agg['TklW']/df_agg['Tkl']
     df_agg['TklW'] = df_agg['TklW'].fillna(0)
+    df_agg['PKcon%'] = 100*df_agg['PK']/df_agg['PKatt_x_x']
+    df_agg['PKsv%'] = 100*df_agg['PKsv']/df_agg['PKatt_y']
+    df_agg['PKsv%'] = df_agg.loc[df_agg['Pos'] == 'GK', 'PKsv%'].fillna(avg_pk_save_pct)
+    
     for x in avg.index:
-        if(x not in ['Save%','TotCmp%','TklW','Touch%']):  df_agg[x] = df_agg[x] + avg[x]
+        if(x not in ['Save%','TotCmp%','TklW','Touch%','PKsv%','PKcon%','Goals%','Assist%','Mn/Start','Mn/Sub']):  df_agg[x] = df_agg[x] + avg[x]
+        elif(x in ['PKsv%','PKcon%']): df_agg[x] = (df_agg[x]*df_agg['Min'] + avg[x]*6000)/(df_agg['Min']+6000)
         else: df_agg[x] = (df_agg[x]*df_agg['Min'] + avg[x]*600)/(df_agg['Min']+600)
     df_agg['Min'] = df_agg['Min'] + 600
+    
+    #VERIFY FROM HERE, ALSO ADD CHANCES CREATED TO THE LEAGUE CONVERSIONS AND AGING
     df_agg = aggregate_stats(df_agg,1)
     df_agg['90s'] = df_agg['90s'] - (600/90)
     df_agg['Pos'] = df_agg['Pos'].str.replace(' ','')
     df_agg['Pos'] = df_agg['Pos'].apply(keep_unique_substrings)
     df_agg['club'] = df_agg['club'].str.replace('-',' ')
     
-    aging = aging_analysis(1,proj_year)
+    aging = aging_analysis(1)
+    #copies based on existing curves
+    aging['SoT'] = aging['Sh']
+    aging['CC'] = aging['PrgP']
+    aging['PKsv%'] = aging['Save%']
     projections_copy = df_agg.merge(aging, left_on='Age_copy', right_on='Age')
     projections_copy = projections_copy.merge(aging, left_on='Age_x', right_on='Age')
     
     for v in ['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
-             'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld']:
+             'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld', 'SoT','CC', 'PKsv%','CrdY','CrdR']:
         projections_copy[f'{v}_x'] *= projections_copy[v] / projections_copy[f'{v}_y']
         
-    projections_copy = projections_copy[['Player', 'Nation', 'Pos', 'club', 'Age_x', 'season', 'Min%','Starts','Subs','unSub',
-           'Touch%','Touches_x', 'o_Touches_x', 'Save%_x', 'Sh_x', 'TotAtt_x', 'TotCmp%_x', 'PrgP_x', 'Carries_x', 'PrgC_x', 
-           'Tkl_x', 'TklW_x', 'blkSh_x', 'blkPass_x', 'Int_x', 'Clr_x', 'Err_x', 'Fls_x', 'Fld_x']]
-    projections_copy.columns = ['Player', 'Nation', 'Pos', 'club', 'Age', 'season', 'Min/G','p(start)','p(sub)','p(unSub)',
-           'Touch%','Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries', 'PrgC', 
-           'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld']
+    projections_copy = projections_copy[['Player', 'Nation', 'Pos', 'club', 'Age_x', 'season', 'Min%', 'Mn/Start', 'Mn/Sub',
+           'Touch%','Touches_x', 'o_Touches_x', 'Save%_x', 'PKsv%_x', 'Goals%', 'PKatt%', 'Sh_x', 'SoT_x', 'PKcon%', 
+           'TotAtt_x', 'TotCmp%_x', 'PrgP_x', 'Assist%', 'CC_x', 'Carries_x', 'PrgC_x', 'Tkl_x', 'TklW_x', 'blkSh_x', 
+           'blkPass_x', 'Int_x', 'Clr_x', 'Err_x', 'Fls_x', 'Fld_x', 'CrdY_x','CrdR_x']]
+    projections_copy.columns = ['Player', 'Nation', 'Pos', 'club', 'Age', 'season', 'p(90/G)', 'Mn/Start', 'Mn/Sub',
+           'Touch%','Touches', 'o_Touches', 'Save%', 'PKsv%', 'Goals%', 'PKatt%', 'Sh', 'SoT', 'PKcon%', 'TotAtt', 'TotCmp%', 
+           'PrgP', 'Assist%', 'CC', 'Carries', 'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld','CrdY','CrdR']
     return projections_copy
 
 def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
@@ -659,10 +725,10 @@ def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     squads = squads.drop('Column1', axis=1)
     df = pd.merge(df, squads, on=['Player','Nation','Pos','Age'], how='left')
     if(custom_lineups == 1): df['club_x'] = df['club_y']
-    if(custom_mins == 1): df['Min/G_x'] = df['Min/G_y']
-    df.rename(columns={'club_x': 'club', 'Min/G_x': 'Min/G'}, inplace=True)
-    df.drop(['club_y','Min/G_y'], axis=1, inplace=True) 
-    df['Min/G'] = df['Min/G'].fillna(0)
+    if(custom_mins == 1): df['p(90/G)_x'] = df['p(90/G)_y']
+    df.rename(columns={'club_x': 'club', 'p(90/G)_x': 'p(90/G)'}, inplace=True)
+    df.drop(['club_y','p(90/G)_y'], axis=1, inplace=True) 
+    df['p(90/G)'] = df['p(90/G)'].fillna(0)
     
     coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
     coeffs = coeffs.drop('Unnamed: 0', axis=1)
@@ -672,39 +738,42 @@ def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     ga = ga.drop('Unnamed: 0', axis=1)
     
     df_team = df[df['club']==team]
+    df_team[['Start','Sub']] = df_team[['Start','Sub']].fillna(0)
+    if(df_team['p(90/G)'].sum() == 0): df_team['p(90/G)'] = (df_team['Start']*df_team['Mn/Start'] + df_team['Sub']*df_team['Mn/Sub'])/90
+    
     keepers = df_team[df_team['Pos']=='GK']    
-    keepers = keepers.sort_values(by='Min/G', ascending=False)
+    keepers = keepers.sort_values(by='p(90/G)', ascending=False)
     keepers['rank'] = list(range(1,len(keepers)+1))
     outfielders = df_team[df_team['Pos']!='GK']
-    outfielders = outfielders.sort_values(by='Min/G', ascending=False)
+    outfielders = outfielders.sort_values(by='p(90/G)', ascending=False)
     outfielders['rank'] = list(range(1,len(outfielders)+1))
     
     exp = 1.0
-    while((keepers['Min/G'].sum() < 0.99) or (keepers['Min/G'].sum() > 1.01)):
-        if(keepers['Min/G'].sum() < 0.99):
-            keepers['Min/G'] *= pow(exp,keepers['rank'])
+    while((keepers['p(90/G)'].sum() < 0.99) or (keepers['p(90/G)'].sum() > 1.01)):
+        if(keepers['p(90/G)'].sum() < 0.99):
+            keepers['p(90/G)'] *= pow(exp,keepers['rank'])
             exp += 0.0001
         else:
-            keepers['Min/G'] *= pow(exp,keepers['rank'])
+            keepers['p(90/G)'] *= pow(exp,keepers['rank'])
             exp -= 0.0001
-        keepers['Min/G'] = keepers['Min/G'].clip(upper=1)
+        keepers['p(90/G)'] = keepers['p(90/G)'].clip(upper=1)
     
     exp = 1.0
-    while((outfielders['Min/G'].sum() <= 9.9) or (outfielders['Min/G'].sum() >= 10.1)):
-        if(outfielders['Min/G'].sum() <= 9.9):
-            outfielders['Min/G'] *= pow(exp,outfielders['rank'])
+    while((outfielders['p(90/G)'].sum() <= 9.9) or (outfielders['p(90/G)'].sum() >= 10.1)):
+        if(outfielders['p(90/G)'].sum() <= 9.9):
+            outfielders['p(90/G)'] *= pow(exp,outfielders['rank'])
             exp += 0.0001
-        elif(outfielders['Min/G'].sum() >= 10.1):
-            outfielders['Min/G'] *= pow(exp,outfielders['rank'])
+        elif(outfielders['p(90/G)'].sum() >= 10.1):
+            outfielders['p(90/G)'] *= pow(exp,outfielders['rank'])
             exp -= 0.0001
-        outfielders['Min/G'] = outfielders['Min/G'].clip(upper=1)
-        #print(outfielders['Min/G'].sum())
+        outfielders['p(90/G)'] = outfielders['p(90/G)'].clip(upper=1)
+        #print(outfielders['p(90/G)'].sum())
     
-    keepers['Min/G'] = keepers['Min/G']/keepers['Min/G'].sum()
-    outfielders['Min/G'] = 10*outfielders['Min/G']/outfielders['Min/G'].sum()
-    touches = (outfielders['Min/G']*outfielders['Touches']).sum() + (keepers['Min/G']*keepers['Touches']).sum()
-    opp_touches = (outfielders['Min/G']*outfielders['o_Touches']).sum() + (keepers['Min/G']*keepers['o_Touches']).sum()
-    touch_pct = (outfielders['Min/G']*outfielders['Touch%']).sum() + (keepers['Min/G']*keepers['Touch%']).sum()
+    keepers['p(90/G)'] = keepers['p(90/G)']/keepers['p(90/G)'].sum()
+    outfielders['p(90/G)'] = 10*outfielders['p(90/G)']/outfielders['p(90/G)'].sum()
+    touches = (outfielders['p(90/G)']*outfielders['Touches']).sum() + (keepers['p(90/G)']*keepers['Touches']).sum()
+    opp_touches = (outfielders['p(90/G)']*outfielders['o_Touches']).sum() + (keepers['p(90/G)']*keepers['o_Touches']).sum()
+    touch_pct = (outfielders['p(90/G)']*outfielders['Touch%']).sum() + (keepers['p(90/G)']*keepers['Touch%']).sum()
     outfielders['o_Touches'] =  opp_touches/11
     keepers['o_Touches'] =  opp_touches/11
     outfielders['Touch%'] /=  touch_pct
@@ -716,15 +785,15 @@ def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     for m in ['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW',
               'blkSh','blkPass','Int', 'Clr', 'Err', 'Fls', 'Fld']:
         if(m in ['Touches','o_Touches','Save%']):
-            measure.append((outfielders[m] * outfielders['Min/G']).sum() + (keepers[m] * keepers['Min/G']).sum())
+            measure.append((outfielders[m] * outfielders['p(90/G)']).sum() + (keepers[m] * keepers['p(90/G)']).sum())
         elif(m in ['TotCmp%']):
-            measure.append(((outfielders[m] * outfielders['TotAtt'] * outfielders['Min/G'] * outfielders['Touches']).sum() + (keepers[m] * keepers['TotAtt'] * keepers['Min/G'] * keepers['Touches']).sum())/measure[0])
+            measure.append(((outfielders[m] * outfielders['TotAtt'] * outfielders['p(90/G)'] * outfielders['Touches']).sum() + (keepers[m] * keepers['TotAtt'] * keepers['p(90/G)'] * keepers['Touches']).sum())/measure[0])
         elif(m in ['TklW']):
-            measure.append(((outfielders[m] * outfielders['Tkl'] * outfielders['Min/G'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Tkl'] * keepers['Min/G'] * keepers['o_Touches']).sum())/measure[1])
+            measure.append(((outfielders[m] * outfielders['Tkl'] * outfielders['p(90/G)'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Tkl'] * keepers['p(90/G)'] * keepers['o_Touches']).sum())/measure[1])
         elif(m in ['Tkl','blkSh','blkPass','Int', 'Clr', 'Err', 'Fls']):
-            measure.append(((outfielders[m] * outfielders['Min/G'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Min/G'] * keepers['o_Touches']).sum())/measure[1])
+            measure.append(((outfielders[m] * outfielders['p(90/G)'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['p(90/G)'] * keepers['o_Touches']).sum())/measure[1])
         elif(m in ['Sh','TotAtt','PrgP','Carries','PrgC','Fld']):
-            measure.append(((outfielders[m] * outfielders['Min/G'] * outfielders['Touches']).sum() + (keepers[m] * keepers['Min/G'] * keepers['Touches']).sum())/measure[0])
+            measure.append(((outfielders[m] * outfielders['p(90/G)'] * outfielders['Touches']).sum() + (keepers[m] * keepers['p(90/G)'] * keepers['Touches']).sum())/measure[0])
     
     measure[5]/= measure[4]
     measure[10]/= measure[9]
@@ -742,8 +811,8 @@ def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     ga_t *= np.array(ga['weight'].to_list()[:-1])
     ga_t = sum(ga_t) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
     #print(team,pts)
-    #print(outfielders[outfielders['Min/G']>0.01][['Player','Min/G']])
-    if(return_all_stats == 1): return measure,pts
+    #print(outfielders[outfielders['p(90/G)']>0.01][['Player','p(90/G)']])
+    if(return_all_stats == 1): return measure,keepers,outfielders
     else: return (pts,gf_t,ga_t)
     
 def league_projections(league,custom_lineups,custom_mins):    
@@ -767,13 +836,15 @@ def league_projections(league,custom_lineups,custom_mins):
 
 def h2h(t1,t2,custom_lineups,custom_mins):
     #t1='Liverpool';t2='Bournemouth';custom_lineups=1;custom_mins=1
-    m1,p1,gf1,ga1 = lineup_projection(t1,custom_lineups,custom_mins,1)
-    m2,p2,gf2,ga2 = lineup_projection(t2,custom_lineups,custom_mins,1)
+    m1,k1,o1 = lineup_projection(t1,custom_lineups,custom_mins,1)
+    m2,k2,o2 = lineup_projection(t2,custom_lineups,custom_mins,1)
     
     gf = pd.read_excel(f'{path}/calibration.xlsx','GF')
     gf = gf.drop('Unnamed: 0', axis=1)
     ga = pd.read_excel(f'{path}/calibration.xlsx','GA')
     ga = ga.drop('Unnamed: 0', axis=1)
+    ast = pd.read_excel(f'{path}/calibration.xlsx','Ast')
+    ast = ast.drop('Unnamed: 0', axis=1)
     
     gf1 = (np.array(m1[2:]) - np.array(gf['mean'].to_list()[:-1])) / np.array(gf['stdev'].to_list()[:-1])
     gf1 *= np.array(gf['weight'].to_list()[:-1])
@@ -789,28 +860,121 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     ga2 *= np.array(ga['weight'].to_list()[:-1])
     ga2 = sum(ga2) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
     
+    a1 = (np.array(m1[2:]) - np.array(ast['mean'].to_list()[:-1])) / np.array(ast['stdev'].to_list()[:-1])
+    a1 *= np.array(ast['weight'].to_list()[:-1])
+    a1 = sum(a1) * ast.loc[ast['variable']=='pred','stdev'].sum()  + ast.loc[ast['variable']=='pred','mean'].sum()
+    a2 = (np.array(m1[2:]) - np.array(ast['mean'].to_list()[:-1])) / np.array(ast['stdev'].to_list()[:-1])
+    a2 *= np.array(ast['weight'].to_list()[:-1])
+    a2 = sum(a2) * ast.loc[ast['variable']=='pred','stdev'].sum()  + ast.loc[ast['variable']=='pred','mean'].sum()
+    
     avg_goals = (gf.loc[gf['variable']=='pred','mean'].mean() + ga.loc[gf['variable']=='pred','mean'].mean())/2
     home_adv = 0.1 # research this in detail
-    lg_avg_touches = 600 #check if this is 600 or 625
+    lg_avg_touches = 625 #check if this is 600 or 625
     
-    t1_g = (1+home_adv) * gf1 * ga2 / avg_goals
-    t2_g = (1-home_adv) * gf2 * ga1 / avg_goals
+    t1_g = gf1 * ga2 / avg_goals
+    t2_g = gf2 * ga1 / avg_goals
+    delta_g = home_adv * (t1_g + t2_g)/2
+    t1_g += delta_g
+    t2_g -= delta_g
+    
+    t1_a = a1 * (t1_g/gf1)
+    t2_a = a2 * (t2_g/gf2)
     
     t1_cs = poisson.pmf(0, t2_g)
     t2_cs = poisson.pmf(0, t1_g)
       
-    t1_touches = (1+home_adv)*m1[0]*m2[1]/lg_avg_touches
-    t2_touches = (1+home_adv)*m2[0]*m1[1]/lg_avg_touches
+    t1_touches = m1[0]*m2[1]/lg_avg_touches
+    t2_touches = m2[0]*m1[1]/lg_avg_touches
+    delta_touches = home_adv * (t1_touches + t2_touches)/2
+    t1_touches += delta_touches
+    t2_touches -= delta_touches
     
+    k1['Touches'] *= t1_touches/m1[0]
+    k1['o_Touches'] *= t2_touches/m1[1]
+    o1['Touches'] *= t1_touches/m1[0]
+    o1['o_Touches'] *= t2_touches/m1[1]
+    k2['Touches'] *= t2_touches/m2[0]
+    k2['o_Touches'] *= t1_touches/m2[1]
+    o2['Touches'] *= t2_touches/m2[0]
+    o2['o_Touches'] *= t1_touches/m2[1]
+    
+    match_df = pd.concat([k1, k2, o1, o2], ignore_index=True)
+    match_df = match_df[match_df['p(90/G)']>0]
+    
+    t1_gs = (match_df.loc[match_df['club']==t1,'Goals%']*match_df.loc[match_df['club']==t1,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t1,'Goals%'] /= t1_gs
+    t2_gs = (match_df.loc[match_df['club']==t2,'Goals%']*match_df.loc[match_df['club']==t2,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t2,'Goals%'] /= t2_gs
+    t1_pen = (match_df.loc[match_df['club']==t1,'PKatt%']*match_df.loc[match_df['club']==t1,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t1,'PKatt%'] /= t1_pen
+    t2_pen = (match_df.loc[match_df['club']==t2,'PKatt%']*match_df.loc[match_df['club']==t2,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t2,'PKatt%'] /= t2_pen
+    t1_as = (match_df.loc[match_df['club']==t1,'Assist%']*match_df.loc[match_df['club']==t1,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t1,'Assist%'] /= t1_as
+    t2_as = (match_df.loc[match_df['club']==t2,'Assist%']*match_df.loc[match_df['club']==t2,'p(90/G)']).sum()
+    match_df.loc[match_df['club']==t2,'Assist%'] /= t2_as
+    
+    for c in match_df.columns:
+        if(c in ['Sh','TotAtt','PrgP', 'Carries', 'PrgC','Fld','CC','SoT']):
+            match_df[c] *=  match_df['Touches'] * match_df['p(90/G)']
+        elif(c in ['Tkl','blkSh','blkPass', 'Int', 'Clr', 'Err', 'Fls','CrdY','CrdR']):
+            match_df[c] *=  match_df['o_Touches'] * match_df['p(90/G)']
+        elif(c == 'TotCmp%'):
+            match_df[c] *= match_df['TotAtt']/100
+        elif(c == 'TklW'):
+            match_df[c] *= match_df['Tkl']/100
+    
+    match_df.loc[match_df['club']==t1,'npG'] = match_df['Goals%'] * match_df['p(90/G)'] * t1_g * 0.9
+    match_df.loc[match_df['club']==t2,'npG'] = match_df['Goals%'] * match_df['p(90/G)'] * t2_g * 0.9
+    match_df.loc[match_df['club']==t1,'pG'] = match_df['PKatt%'] * match_df['p(90/G)'] * t1_g * 0.1 #10% of goals are pens, research this
+    match_df.loc[match_df['club']==t2,'pG'] = match_df['PKatt%'] * match_df['p(90/G)'] * t2_g * 0.1
+    match_df.loc[match_df['club']==t1,'A'] = match_df['Assist%'] * match_df['p(90/G)'] * t1_a
+    match_df.loc[match_df['club']==t2,'A'] = match_df['Assist%'] * match_df['p(90/G)'] * t2_a
+    match_df.loc[match_df['club']==t1,'CS%'] = t1_cs
+    match_df.loc[match_df['club']==t2,'CS%'] = t2_cs
+    match_df.loc[match_df['club']==t1,'GC'] = t2_g
+    match_df.loc[match_df['club']==t2,'GC'] = t1_g
+    
+    match_df['CBIT'] = match_df['TklW']+match_df['blkSh']+match_df['blkPass']+match_df['Int']+match_df['Clr']
+    saves_t2 = match_df.loc[match_df['club']==t1,'SoT'].sum() - t1_g
+    saves_t1 = match_df.loc[match_df['club']==t2,'SoT'].sum() - t2_g
+    match_df.loc[(match_df['club']==t1)&(match_df['Pos']=='GK'),'Saves'] = match_df.loc[(match_df['club']==t1)&(match_df['Pos']=='GK'),'p(90/G)'] * saves_t1
+    match_df.loc[(match_df['club']==t2)&(match_df['Pos']=='GK'),'Saves'] = match_df.loc[(match_df['club']==t2)&(match_df['Pos']=='GK'),'p(90/G)'] * saves_t2
+    match_df['pMiss'] = match_df['pG']*(100-match_df['PKcon%'])/match_df['PKcon%']
+    #fix this formula
+    match_df.loc[(match_df['club']==t1)&(match_df['Pos']=='GK'),'pSaves'] = match_df.loc[(match_df['club']==t1)&(match_df['Pos']=='GK'),'p(90/G)'] * match_df.loc[(match_df['club']==t1)&(match_df['Pos']=='GK'),'PKsv%'] * t2_g * 0.1/100
+    match_df.loc[(match_df['club']==t2)&(match_df['Pos']=='GK'),'pSaves'] = match_df.loc[(match_df['club']==t2)&(match_df['Pos']=='GK'),'p(90/G)'] * match_df.loc[(match_df['club']==t2)&(match_df['Pos']=='GK'),'PKsv%'] * t1_g * 0.1/100
+    match_df[['pMiss','Saves','pSaves']] = match_df[['pMiss','Saves','pSaves']].fillna(0)
+    
+    draw = skellam.pmf(0,t1_g,t2_g)
+    t1_win = 1-skellam.cdf(0,t1_g,t2_g)
+    t2_win = skellam.cdf(-1,t1_g,t2_g)
+    print(t1,round(t1_win,3),"draw",round(draw,3),t2,round(t2_win,3))
     print(t1,'goals',round(t1_g,2),'CS%',round(100*t1_cs,2))
     print(t2,'goals',round(t2_g,2),'CS%',round(100*t2_cs,2))
     
+    match_df = match_df[['Player','Nation','D11_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR']]
+    match_df = fantasy_points(match_df)
+    match_df['Mins'] = match_df['p(90/G)'] * 90
+    match_df = match_df[['Player','club','D11_Pos','Mins','Points']]
+    return match_df
+
+def fantasy_points(df):    
+    df['Points'] = np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 60, np.where((df['D11_Pos']=='MF'), 50, 40)) * (df['npG']+df['pG'])
+    df['Points'] += 20*df['A'] + 3*df['CC'] + 6*df['SoT'] + 0.2*df['TotCmp%'] - 20*df['pMiss']
+    df['Points'] += 4*(df['TklW']+df['Int']) + 6*df['Saves'] + 50*df['pSaves']
+    df['Points'] += 20*(1-poisson.cdf(54, 90*df['p(90/G)']))*df['CS%']*np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 1,0)
+    df['Points'] += 2*poisson.cdf(25, 90*df['p(90/G)'])- poisson.cdf(12, 90*df['p(90/G)']) + 4*(1-poisson.cdf(30, 90*df['p(90/G)']))
+    df['Points'] += -2*np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 1,0)*df['p(90/G)']*df['GC']
+    df['Points'] += -4*df['CrdY'] - 10*df['CrdR']
+    #add own goal points
+    return df
 
 #%% extract data
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
-player_stats_raw = multi_team_links(2021,2024,882)
+player_stats_raw = multi_team_links(2021,2024,21)
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
@@ -818,16 +982,16 @@ player_stats_raw = multi_team_links(2021,2024,882)
 #t_stats = multi_leagues(1)
 #summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001,'Pts') # target variables can be - GF, GA, xG, xGA, GD, xGD, Pts
 #player projection data
-factors = league_conversion_factors(0,2025)
-aging = aging_analysis(0,2025)
+factors = league_conversion_factors(0) #0 to generate them, 1 to read from the file
+aging = aging_analysis(0) #0 to generate them, 1 to read from the file
 
 #%% generate player projections
-projections = mean_reversion(2025,'premier league')
+projections = mean_reversion()
 #to identify players whose data has been duplicated due to yob mismatch
 duplicates = projections.pivot_table(values=['season'], index=['Player','Nation','Age'], aggfunc='count')
 duplicates = duplicates[duplicates['season']>1]
 
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
-table = league_projections('premier league',1,1) #team, custom lineups, custom mins
-#h2h('Liverpool','Manchester City',0,0)
+#table = league_projections(standard,1,1) #team, custom lineups, custom mins
+points = h2h('Liverpool','Bournemouth',1,1) #home team, away team, custom lineups, custom mins
