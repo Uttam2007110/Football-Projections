@@ -17,6 +17,7 @@ import statsmodels.api as sm
 import statsmodels.formula.api as smf
 from scipy.stats import poisson
 from scipy.stats import skellam
+from io import StringIO
 
 from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
@@ -33,6 +34,10 @@ proj_year = 2025
 standard = 'premier league'
 
 #%% functions
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36'
+}
+
 def league_mapping(code):
     league_code = {
         9: 'Premier-League', 11: 'Serie-A', 12: 'La-Liga', 13: 'Ligue-1', 20: 'Bundesliga',
@@ -97,7 +102,7 @@ def fbref_team_ids(season,code):
     else: #leagues start in summer
         url = f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats'
     #take care to verify why this bypass is needed
-    data  = requests.get(url,verify=False).text
+    data  = requests.get(url,verify=False,headers=headers).text
     #data  = requests.get(url).text
     soup = BeautifulSoup(data,"html.parser")
     if(code in [8,19,882,14,676,685,1]):
@@ -122,14 +127,32 @@ def fbref_team_ids(season,code):
 
 def player_stats(club,code,season,league_code):
     if(league_code in [8,19,882,14,676,685,1]):
-        ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/c{league_code}/{club}-Stats')
+        #ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/c{league_code}/{club}-Stats')
+        url = f'https://fbref.com/en/squads/{code}/{season}-{season+1}/c{league_code}/{club}-Stats'
     elif(league_code in [24,21,22]): #leagues start in winter
-        ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}/{club}-Stats')
+        #ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}/{club}-Stats')
+        url = f'https://fbref.com/en/squads/{code}/{season}/{club}-Stats'
     else: #leagues start in summer
-        ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats')
+        #ref = pd.read_html(f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats')
+        url = f'https://fbref.com/en/squads/{code}/{season}-{season+1}/{club}-Stats'
     
-    #ref = pd.read_html('https://fbref.com/en/squads/943e8050/2023-2024/9/Burnley-Stats-Premier-League')
+    #url = 'https://fbref.com/en/squads/943e8050/2023-2024/9/Burnley-Stats-Premier-League'
     
+    data  = requests.get(url,verify=False,headers=headers).text
+    #data  = requests.get(url).text
+    soup = BeautifulSoup(data,"html.parser")
+    tables = soup.find_all('table')
+    
+    ref = []
+    for i, table in enumerate(tables):
+        try:
+            # pd.read_html can directly parse a table element converted to string
+            df = pd.read_html(StringIO(str(table)))[0]
+            ref.append(df)
+            #print(f"Table {i+1} successfully converted to DataFrame.")
+        except Exception as e:
+            print(f"{club},{season},Could not convert Table {i+1} to DataFrame: {e}")
+
     basic = ref[0]
     basic.columns = basic.columns.droplevel(0)
     basic = basic[['Player', 'Nation', 'Pos', 'Age', 'MP', 'Min', '90s','Gls','PK','PKatt','xG','npxG']]
@@ -182,7 +205,8 @@ def player_stats(club,code,season,league_code):
     merged_df = merged_df.dropna(subset=['Nation','Min'])
     merged_df['season'] = season
     merged_df['club'] = club
-    #p_stats_agg = aggregate_stats(merged_df,1)
+    #post reading tables from beautifu soup, player age is a string of YY-DDD
+    merged_df['Age'] = merged_df['Age'].str.split('-').str[0].astype(int)
     return merged_df
     
 def team_stats(init_season,end_season,code):
@@ -368,9 +392,9 @@ def multi_team_links(start,end,code):
     raw = pd.concat(raw)
     return raw
 
-def new_season_data():
+def new_season_data(s):
     for l in valid_leagues:
-        league_current = multi_team_links(proj_year-1,proj_year-1,9)
+        league_current = multi_team_links(s,s,9)
         league = pd.read_excel(f'{path}/fbref.xlsx',l)
         league = league[league['season']<proj_year-1]
         league = pd.concat([league,league_current])
