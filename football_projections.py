@@ -18,10 +18,14 @@ import statsmodels.formula.api as smf
 from scipy.stats import poisson
 from scipy.stats import skellam
 from io import StringIO
+from datetime import datetime
 
 from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
 #path = "C:/Users/uttam/Desktop/Sports/football"
@@ -30,7 +34,7 @@ valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'brazilian serie a','mls','liga mx',
                  'champions league','europa league','conference league']
 
-proj_year = 2025
+proj_year = 2026
 standard = 'premier league'
 
 #%% functions
@@ -54,6 +58,21 @@ def league_mapping(code):
         code = 9
         league = 'Premier-League'
     return code,league
+
+def code_mapping(league):
+    code_league = {
+        'serie a':11,'bundesliga':20,'premier league':9,'la liga':12,'ligue un':13,
+        'championship':10,'liga portugal':32,'eredivisie':23,'serie b':18,'belgian pro league':37,
+        'brazilian serie a':24,'mls':22,'liga mx':31,
+        'champions league':8,'europa league':19,'conference league':882
+        }
+    try:
+        code = code_league[league]
+    except KeyError:
+        print("unknown code was selected, premier league chosen as default")
+        code = 9
+        league = 'premier league'
+    return league,code
 
 def fbref_league_fixtures(season,code):
     code,league = league_mapping(code)
@@ -206,7 +225,22 @@ def player_stats(club,code,season,league_code):
     merged_df['season'] = season
     merged_df['club'] = club
     #post reading tables from beautifu soup, player age is a string of YY-DDD
-    merged_df['Age'] = merged_df['Age'].str.split('-').str[0].astype(int)
+    try:
+        pyears = merged_df['Age'].str.split('-').str[0].astype(int)
+        pdays = merged_df['Age'].str.split('-').str[1].astype(int)
+        if(league_code in [21,22,24]):
+            #check these for every new season run
+            if(league_code==21): delta = (datetime.now() - datetime(proj_year-1, 1, 23)).days
+            if(league_code==22): delta = (datetime.now() - datetime(proj_year-1, 2, 22)).days
+            if(league_code==24): delta = (datetime.now() - datetime(proj_year-1, 3, 29)).days
+            else: delta = (datetime.now() - datetime(proj_year-1, 3, 1)).days
+            pdays -= delta
+            pdays = pdays.apply(lambda x: -1 if x < 0 else 0)
+            merged_df['Age']  = pyears + pdays
+        else:
+            merged_df['Age']  = pyears
+    except AttributeError:
+        merged_df['Age'] #its an integer, so no issue
     return merged_df
     
 def team_stats(init_season,end_season,code):
@@ -393,12 +427,19 @@ def multi_team_links(start,end,code):
     return raw
 
 def new_season_data(s):
-    for l in valid_leagues:
-        league_current = multi_team_links(s,s,9)
-        league = pd.read_excel(f'{path}/fbref.xlsx',l)
-        league = league[league['season']<proj_year-1]
-        league = pd.concat([league,league_current])
-        #write to file
+    for l in valid_leagues: #['brazilian serie a','mls']:
+        print(l)
+        l,c = code_mapping(l)
+        try:
+            league_current = multi_team_links(s-1,s-1,c)
+            league = pd.read_excel(f'{path}/fbref.xlsx',l)
+            league = league.drop('Unnamed: 0', axis=1)
+            league = league[league['season']<s-1]
+            league = pd.concat([league,league_current])
+            with pd.ExcelWriter(f'{path}/fbref.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                league.to_excel(writer, sheet_name=l, index=True)
+        except ValueError:
+            print(l,"skipped because there is no data")
 
 def extract_player_data(convert,target):
     df_all = []
@@ -998,7 +1039,8 @@ def fantasy_points(df):
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
-player_stats_raw = multi_team_links(2021,2024,21)
+#player_stats_raw = multi_team_links(2021,2024,21)
+new_season_data(proj_year)
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
@@ -1018,4 +1060,4 @@ duplicates = duplicates[duplicates['season']>1]
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points = h2h('Liverpool','Bournemouth',1,1) #home team, away team, custom lineups, custom mins
+points = h2h('Liverpool','Newcastle',0,0) #home team, away team, custom lineups, custom mins
