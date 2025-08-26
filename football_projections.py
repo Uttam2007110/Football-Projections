@@ -228,17 +228,12 @@ def player_stats(club,code,season,league_code):
     try:
         pyears = merged_df['Age'].str.split('-').str[0].astype(int)
         pdays = merged_df['Age'].str.split('-').str[1].astype(int)
-        if(league_code in [21,22,24]):
-            #check these for every new season run
-            if(league_code==21): delta = (datetime.now() - datetime(proj_year-1, 1, 23)).days
-            if(league_code==22): delta = (datetime.now() - datetime(proj_year-1, 2, 22)).days
-            if(league_code==24): delta = (datetime.now() - datetime(proj_year-1, 3, 29)).days
-            else: delta = (datetime.now() - datetime(proj_year-1, 3, 1)).days
-            pdays -= delta
-            pdays = pdays.apply(lambda x: -1 if x < 0 else 0)
-            merged_df['Age']  = pyears + pdays
-        else:
-            merged_df['Age']  = pyears
+        #check these for every new season run
+        if(league_code in [21,22,24]): delta = (datetime.now() - datetime(proj_year-1, 2, 1)).days
+        else : delta = (datetime.now() - datetime(proj_year-1, 8, 1)).days
+        pdays -= delta
+        pdays = pdays.apply(lambda x: -1 if x < 0 else 0)
+        merged_df['Age']  = pyears + pdays
     except AttributeError:
         merged_df['Age'] #its an integer, so no issue
     return merged_df
@@ -402,7 +397,7 @@ def multi_leagues(read):
         t_stats_5 = team_stats(2017,2024,20)
         df = pd.concat([t_stats_1,t_stats_2,t_stats_3,t_stats_4,t_stats_5])
     else:
-        df = pd.read_excel(f'{path}/fbref.xlsx','big 5 leagues raw')
+        df = pd.read_excel(f'{path}/fbref/big 5 leagues raw.xlsx','Sheet1')
         df = df.drop('index', axis=1)
     return df
 
@@ -431,13 +426,13 @@ def new_season_data(s):
         print(l)
         l,c = code_mapping(l)
         try:
-            league_current = multi_team_links(s-1,s-1,c)
-            league = pd.read_excel(f'{path}/fbref.xlsx',l)
+            league_current = multi_team_links(s,s,c)
+            league = pd.read_excel(f'{path}/fbref/{l}.xlsx','Sheet1')
             league = league.drop('Unnamed: 0', axis=1)
-            league = league[league['season']<s-1]
+            league = league[league['season']<s]
             league = pd.concat([league,league_current])
-            with pd.ExcelWriter(f'{path}/fbref.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
-                league.to_excel(writer, sheet_name=l, index=True)
+            with pd.ExcelWriter(f'{path}/fbref/{l}.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+                league.to_excel(writer, sheet_name='Sheet1', index=True)
         except ValueError:
             print(l,"skipped because there is no data")
 
@@ -447,7 +442,7 @@ def extract_player_data(convert,target):
     exceptions['yob'] = proj_year - exceptions['Age'] - 1  
     name_changes = pd.read_excel(f'{path}/calibration.xlsx','name changes')
     for l in valid_leagues:
-        df = pd.read_excel(f'{path}/fbref.xlsx',l)
+        df = pd.read_excel(f'{path}/fbref/{l}.xlsx','Sheet1')
         df = df.drop('Unnamed: 0', axis=1)
         df['CC'] = df['Ast'] + df['KP']
         df = df[['Player','club','Nation','Pos','Age','season','Min','Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC',
@@ -696,7 +691,7 @@ def mean_reversion():
     pt2 = pt2.pivot_table(values=['Mn/Start','Mn/Sub'], 
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'weight2']))
-    avg = pd.read_excel(f'{path}/fbref.xlsx',standard)
+    avg = pd.read_excel(f'{path}/fbref/{standard}.xlsx','Sheet1')
     avg['CC'] = avg['Ast'] + avg['KP']
     avg_save_pct = 100*avg['Saves'].sum()/avg['SoTA'].sum() 
     avg_pk_save_pct = 100*avg['PKsv'].sum()/avg['PKatt_y'].sum()
@@ -900,7 +895,7 @@ def league_projections(league,custom_lineups,custom_mins):
     return table
 
 def h2h(t1,t2,custom_lineups,custom_mins):
-    #t1='Liverpool';t2='Bournemouth';custom_lineups=1;custom_mins=1
+    #t1='Liverpool';t2='Newcastle United';custom_lineups=1;custom_mins=1
     m1,k1,o1 = lineup_projection(t1,custom_lineups,custom_mins,1)
     m2,k2,o2 = lineup_projection(t2,custom_lineups,custom_mins,1)
     
@@ -933,11 +928,19 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     a2 = sum(a2) * ast.loc[ast['variable']=='pred','stdev'].sum()  + ast.loc[ast['variable']=='pred','mean'].sum()
     
     avg_goals = (gf.loc[gf['variable']=='pred','mean'].mean() + ga.loc[gf['variable']=='pred','mean'].mean())/2
+    avg = pd.read_excel(f'{path}/fbref/{standard}.xlsx','Sheet1')
+    avg = avg.pivot_table(values=['Gls','Starts'], index=['season'], aggfunc='sum')
+    avg['G_per_game'] = avg['Gls']/(avg['Starts']/11)
+    avg = avg.reset_index()
+    avg['weight'] = pow(2/3,avg['season'].max()-avg['season'])
+    avg['weight'] *= avg['Starts']
+    avg['weight'] /= sum(avg['weight'])
+    avg = (avg['weight']*avg['G_per_game']).sum()
     home_adv = 0.1 # research this in detail
     lg_avg_touches = 625 #check if this is 600 or 625
     
-    t1_g = gf1 * ga2 / avg_goals
-    t2_g = gf2 * ga1 / avg_goals
+    t1_g = (avg/avg_goals) * gf1 * ga2 / avg_goals
+    t2_g = (avg/avg_goals) * gf2 * ga1 / avg_goals
     delta_g = home_adv * (t1_g + t2_g)/2
     t1_g += delta_g
     t2_g -= delta_g
@@ -1018,21 +1021,55 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     print(t1,'goals',round(t1_g,2),'CS%',round(100*t1_cs,2))
     print(t2,'goals',round(t2_g,2),'CS%',round(100*t2_cs,2))
     
-    match_df = match_df[['Player','Nation','D11_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR']]
+    #foul percentage
+    match_df.loc[match_df['club']==t1,'Fls'] /=  match_df.loc[match_df['club']==t1,'Fls'].sum()
+    match_df.loc[match_df['club']==t2,'Fls'] /=  match_df.loc[match_df['club']==t2,'Fls'].sum()
+    match_df['Fls_Pen'] = match_df['Fls'] * match_df['GC']/10   
+    #win loss
+    match_df.loc[match_df['club']==t1,'win'] = t1_win
+    match_df.loc[match_df['club']==t2,'win'] = t2_win
+    match_df.loc[match_df['club']==t1,'loss'] = t2_win
+    match_df.loc[match_df['club']==t2,'loss'] = t1_win
+    #mapping pos
+    match_df = position_mapping(match_df)
+    match_df['FT_Pos'] = match_df['FT_Pos'].fillna(match_df['mapped_Pos'])
+    
+    match_df = match_df[['Player','Nation','FT_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR','Fls_Pen','win','loss']]
     match_df = fantasy_points(match_df)
     match_df['Mins'] = match_df['p(90/G)'] * 90
-    match_df = match_df[['Player','club','D11_Pos','Mins','Points']]
+    match_df = match_df[['Player','club','FT_Pos','Mins','Points']]
     return match_df
 
-def fantasy_points(df):    
-    df['Points'] = np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 60, np.where((df['D11_Pos']=='MF'), 50, 40)) * (df['npG']+df['pG'])
-    df['Points'] += 20*df['A'] + 3*df['CC'] + 6*df['SoT'] + 0.2*df['TotCmp%'] - 20*df['pMiss']
-    df['Points'] += 4*(df['TklW']+df['Int']) + 6*df['Saves'] + 50*df['pSaves']
-    df['Points'] += 20*(1-poisson.cdf(54, 90*df['p(90/G)']))*df['CS%']*np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 1,0)
-    df['Points'] += 2*poisson.cdf(25, 90*df['p(90/G)'])- poisson.cdf(12, 90*df['p(90/G)']) + 4*(1-poisson.cdf(30, 90*df['p(90/G)']))
-    df['Points'] += -2*np.where((df['D11_Pos']=='GK')|(df['D11_Pos']=='DF'), 1,0)*df['p(90/G)']*df['GC']
-    df['Points'] += -4*df['CrdY'] - 10*df['CrdR']
-    #add own goal points
+def fantasy_points(df):
+    #appearance and >60 mins
+    df['Points'] = (1-poisson.cdf(25, 90*df['p(90/G)'])) + (1-poisson.cdf(60, 90*df['p(90/G)']))
+    #assists, pen miss, cards (OG, causing pens and fks leading to goals missing)
+    df['Points'] += 3*df['A'] - 2*df['pMiss'] -df['CrdY'] - 3*df['CrdR'] - 2*df['Fls_Pen']
+    #win loss points (+/- 0.3)
+    df['Points'] += 0.3*(df['win']-df['loss']) 
+    #goals
+    df['Points'] += np.where((df['FT_Pos']=='GK')|(df['FT_Pos']=='DF'), 6, np.where((df['FT_Pos']=='MF'), 5, 4)) * (df['npG']+df['pG'])
+    #clean sheet
+    df['Points'] += (1-poisson.cdf(60, 90*df['p(90/G)']))*df['CS%']*np.where((df['FT_Pos']=='GK')|(df['FT_Pos']=='DF'), 4, np.where((df['FT_Pos']=='MF'), 1, 0))
+    #2 goals conceded
+    df['Points'] += -0.5*np.where((df['FT_Pos']=='GK')|(df['FT_Pos']=='DF'), 1,0)*df['p(90/G)']*df['GC']
+    #saves and pen saves
+    df['Points'] += 0.5*df['Saves'] + 5*df['pSaves']
+    #Shot on target
+    df['Points'] += np.where((df['FT_Pos']=='GK')|(df['FT_Pos']=='DF'), .6, np.where((df['FT_Pos']=='MF'), .4, .4)) * df['SoT']
+    #played full match
+    df['Points'] += np.where((df['FT_Pos']=='MF')|(df['FT_Pos']=='FW'), 1,0) * df['p(90/G)']
+    #sort descending
+    df = df.sort_values(by='Points', ascending=False)
+    return df
+
+def position_mapping(df):
+    mapping = {'DF,MF': 'DF', 'GK': 'GK', 'DF': 'DF', 'MF': 'MF', 'FW': 'FW', 
+               'FW,MF': 'MF', 'DF,FW': 'DF', 'MF,FW': 'FW', 'DF,MF,FW':'DF',
+               'FW,DF,MF':'DF','FW,MF,DF':'FW','MF,FW,DF':'MF','MF,DF':'MF',
+               'MF,DF,FW':'MF','FW,DF':'DF','DF,FW,MF':'DF','GK,FW,MF':'FW', 
+               'FW,MF,GK':'FW', 'MF,GK':'MF', 'GK,MF':'MF', 'FW,GK':'FW' }
+    df['mapped_Pos'] = df['Pos'].map(mapping)
     return df
 
 #%% extract data
@@ -1040,7 +1077,7 @@ def fantasy_points(df):
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
 #player_stats_raw = multi_team_links(2021,2024,21)
-new_season_data(proj_year)
+new_season_data(proj_year-1)
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
@@ -1060,4 +1097,4 @@ duplicates = duplicates[duplicates['season']>1]
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points = h2h('Liverpool','Newcastle',0,0) #home team, away team, custom lineups, custom mins
+points = h2h('Newcastle United','Liverpool',1,1) #home team, away team, custom lineups, custom mins
