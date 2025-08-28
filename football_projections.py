@@ -27,8 +27,8 @@ from sklearn.metrics import mean_squared_error, r2_score
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
-#path = "C:/Users/uttam/Desktop/Sports/football"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
@@ -777,13 +777,13 @@ def mean_reversion():
     return projections_copy
 
 def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
-    #team='Leeds United'; custom_mins=1; custom_lineups=1
-    df = pd.read_excel(f'{path}/projections.xlsx','Sheet1')
+    #team='Liverpool'; custom_mins=1; custom_lineups=1
+    df = pd.read_excel(f'{path}/projections.xlsx',standard)
     df = df.drop('Column1', axis=1)
     df['TklW'] = df['TklW'].fillna(60.58)
     squads = pd.read_excel(f'{path}/projections.xlsx','squads')
     squads = squads.drop('Column1', axis=1)
-    df = pd.merge(df, squads, on=['Player','Nation','Pos','Age'], how='left')
+    df = pd.merge(df, squads, on=['Player','Nation','Age'], how='left')
     if(custom_lineups == 1): df['club_x'] = df['club_y']
     if(custom_mins == 1): df['p(90/G)_x'] = df['p(90/G)_y']
     df.rename(columns={'club_x': 'club', 'p(90/G)_x': 'p(90/G)'}, inplace=True)
@@ -1038,7 +1038,7 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     match_df = fantasy_points(match_df)
     match_df['Mins'] = match_df['p(90/G)'] * 90
     match_df = match_df[['Player','club','FT_Pos','Mins','Points']]
-    return match_df
+    return match_df,[round(t1_g,2),t1,round(t1_win,3),round(draw,3),round(t2_win,3),t2,round(t2_g,2)]
 
 def fantasy_points(df):
     #appearance and >60 mins
@@ -1072,6 +1072,23 @@ def position_mapping(df):
     df['mapped_Pos'] = df['Pos'].map(mapping)
     return df
 
+def gw_projections(gw,custom_lineups,custom_mins):
+    points = []; summary = [['Home Goals','Home','Home win%','Draw%','Away win%','Away','Away Goals']]
+    fixtures = pd.read_excel(f'{path}/projections.xlsx',f'{standard} schedule')
+    fixtures = fixtures[fixtures['Wk']==gw]
+    fixtures = fixtures[['Home','Away']]
+    for h,a in fixtures.values:
+        pg,sg = h2h(h,a,custom_lineups,custom_mins)
+        points.append(pg)
+        summary.append(sg)
+        print()
+    points = pd.concat(points)
+    points = points.sort_values(by='Points', ascending=False)
+    summary = pd.DataFrame(summary)
+    summary.columns = summary.iloc[0];summary = summary.drop(0)
+    summary = summary.apply(pd.to_numeric, errors='ignore')
+    return points,summary
+
 #%% extract data
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
@@ -1093,8 +1110,10 @@ projections = mean_reversion()
 #to identify players whose data has been duplicated due to yob mismatch
 duplicates = projections.pivot_table(values=['season'], index=['Player','Nation','Age'], aggfunc='count')
 duplicates = duplicates[duplicates['season']>1]
+squads = projections[['Player', 'Nation', 'club', 'Age']]
 
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points = h2h('Newcastle United','Liverpool',1,1) #home team, away team, custom lineups, custom mins
+#points,summary = h2h('Newcastle United','Liverpool',1,1) #home team, away team, custom lineups, custom mins
+points,summary = gw_projections(3,0,0) #match week, custom lineups, custom mins
