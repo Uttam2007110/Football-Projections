@@ -656,6 +656,14 @@ def mean_reversion():
     df = df1.merge(df2)
     df = df.merge(df_pos)
     
+    #weights for the most recent season changed
+    weights = df.pivot_table(values=['Starts'], index=['season'], aggfunc='sum')
+    weights = weights.reset_index()
+    weights['weight'] = pow(2/3,proj_year-weights['season'])
+    weights['weight'] *= weights['Starts']
+    weights['weight'] /= sum(weights['weight'])
+    weights = weights[['season','weight']]
+    
     df['Min%'] = (df['Min']/90)/df['MP_GK_y']
     df['Starts'] = df['Starts']/df['MP_GK_y']
     df['Subs'] = df['Subs']/df['MP_GK_y']
@@ -665,9 +673,11 @@ def mean_reversion():
                         index = ['Player','Nation','club','season','yob','Pos'],
                         aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'MP_GK_y']))
     pt = pt.reset_index()
-    pt['weight'] = pow(2/3,proj_year-pt['season'])
+    pt = pt.merge(weights, left_on=['season'], right_on=['season'], how='left')
+    #pt['weight'] = pow(2/3,proj_year-pt['season'])
     pt['weight2'] = pow(2/3,proj_year-pt['season']) * pt['Min%']
-    df['weight'] = pow(2/3,proj_year-df['season'])
+    df = df.merge(weights, left_on=['season'], right_on=['season'], how='left')
+    #df['weight'] = pow(2/3,proj_year-df['season'])
     df['weight2'] = pow(2/3,proj_year-df['season']) * df['Min']
     df_agg = df.pivot_table(values=['Min','Touches','o_Touches','Sh','TotAtt','PrgP','Carries','PrgC',
                                     'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld',
