@@ -27,15 +27,15 @@ from sklearn.metrics import mean_squared_error, r2_score
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
-path = "C:/Users/uttam/Desktop/Sports/football"
+path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+#path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
                  'champions league','europa league','conference league']
 
 proj_year = 2026
-standard = 'premier league'
+standard = 'serie a'
 
 #%% functions
 headers = {
@@ -232,7 +232,8 @@ def player_stats(club,code,season,league_code):
         if(league_code in [21,22,24]): delta = (datetime.now() - datetime(proj_year-1, 2, 1)).days
         else : delta = (datetime.now() - datetime(proj_year-1, 8, 1)).days
         pdays -= delta
-        pdays = pdays.apply(lambda x: -1 if x < 0 else 0)
+        #check 1st aug dobs, like domenico berardi
+        pdays = pdays.apply(lambda x: -1 if x <= 0 else 0)
         merged_df['Age']  = pyears + pdays
     except AttributeError:
         merged_df['Age'] #its an integer, so no issue
@@ -490,7 +491,7 @@ def league_conversion_factors(read_file):
     else:
         df,leagues = extract_player_data(0,'')
         combos = list(combinations(range(0,len(df)), 2))
-        categories = ['Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries',
+        categories = ['Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries', 'Goals%', 'Assist%', 'PKatt%', 'Touch%',
                       'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld', 'CrdY', 'CrdR']
         all_eqn = [['category'] + leagues]
         
@@ -520,7 +521,7 @@ def league_conversion_factors(read_file):
                 #if((df_from_to['Min_x'].sum()<1000)|(df_from_to['Min_y'].sum()<1000)|(df_to_from['Min_x'].sum()<1000)|(df_to_from['Min_y'].sum()<1000)):
                 #    factor = np.nan
                 #else:
-                if(ch in ['Save%','TotCmp%']):
+                if(ch in ['Save%','TotCmp%','Goals%', 'Assist%', 'PKatt%', 'Touch%']):
                     factor = np.log(((df_from_to[f'{ch}_x']*df_from_to['Min_x']).sum()/df_from_to['Min_x'].sum())/((df_from_to[f'{ch}_y']*df_from_to['Min_y']).sum()/df_from_to['Min_y'].sum())) -\
                          np.log(((df_to_from[f'{ch}_x']*df_to_from['Min_x']).sum()/df_to_from['Min_x'].sum())/((df_to_from[f'{ch}_y']*df_to_from['Min_y']).sum()/df_to_from['Min_y'].sum())) 
                 elif(ch in ['Touches','o_Touches','Sh', 'TotAtt', 'PrgP', 'Carries', 'PrgC', 
@@ -614,6 +615,10 @@ def aging_analysis(read_file):
         df_all['Age'] = range(1,50)
         df_all['Save%'] = df_all['o_Touches']
         df_all['TotCmp%'] = df_all['TotAtt']
+        #df_all['Goals%'] = df_all['Sh']
+        #df_all['Assist%'] = df_all['PrgP']
+        #df_all['PKatt%'] = df_all['Sh']
+        #df_all['Touch%'] = df_all['Touches']
         df_all = df_all[['Age','Touches', 'o_Touches', 'Save%', 'Sh', 'TotAtt', 'TotCmp%', 'PrgP', 'Carries',
                       'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld','CrdY', 'CrdR']]
     return df_all
@@ -673,12 +678,27 @@ def mean_reversion():
                         index = ['Player','Nation','club','season','yob','Pos'],
                         aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'MP_GK_y']))
     pt = pt.reset_index()
+    """
+    pt_mn_start = df.pivot_table(values=['Mn/Start'],
+                        index = ['Player','Nation','club','season','yob','Pos'],
+                        aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'Starts']+1))
+    pt_mn_subs = df.pivot_table(values=['Mn/Sub'],
+                        index = ['Player','Nation','club','season','yob','Pos'],
+                        aggfunc=lambda rows: np.average(rows, weights=df.loc[rows.index, 'Subs']+df.loc[rows.index, 'unSub']+1))
+    pt_mn_start = pt_mn_start.reset_index()
+    pt_mn_subs = pt_mn_subs.reset_index()
+    pt = pt.merge(pt_mn_start, left_on=['Player','Nation','club','season','yob','Pos'], right_on=['Player','Nation','club','season','yob','Pos'], how='left')
+    pt = pt.merge(pt_mn_subs, left_on=['Player','Nation','club','season','yob','Pos'], right_on=['Player','Nation','club','season','yob','Pos'], how='left')
+    """
     pt = pt.merge(weights, left_on=['season'], right_on=['season'], how='left')
     #pt['weight'] = pow(2/3,proj_year-pt['season'])
-    pt['weight2'] = pow(2/3,proj_year-pt['season']) * pt['Min%']
+    #pt['weight2'] = pow(2/3,proj_year-pt['season']) * pt['Min%']
+    pt['weight2'] = pt['weight'] * pt['Min%']
+    
     df = df.merge(weights, left_on=['season'], right_on=['season'], how='left')
     #df['weight'] = pow(2/3,proj_year-df['season'])
-    df['weight2'] = pow(2/3,proj_year-df['season']) * df['Min']
+    #df['weight2'] = pow(2/3,proj_year-df['season']) * df['Min']
+    df['weight2'] = df['weight'] * df['Min%']
     df_agg = df.pivot_table(values=['Min','Touches','o_Touches','Sh','TotAtt','PrgP','Carries','PrgC',
                                     'Tkl', 'TklW','blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld',
                                     'SoT', 'CC', 'PK', 'PKatt_x_x','PKsv','PKatt_y','CrdY','CrdR'],
@@ -693,14 +713,22 @@ def mean_reversion():
     age = df.pivot_table(values=['Age','season'], index=['Player','Nation','yob'], aggfunc='max')
     #review this
     pt2 = pt.copy()
+    pt2 = pt2[pt2['season']>2017]
+    pt2[['Mn/Start','Mn/Sub']] = pt2[['Mn/Start','Mn/Sub']].fillna(0)
     pt = pt.pivot_table(values=['Min%','Starts','Subs','unSub'], 
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt.loc[rows.index, 'weight']))
-    pt2 = pt2[pt2['season']>2017]
-    pt2[['Mn/Start','Mn/Sub']] = pt2[['Mn/Start','Mn/Sub']].fillna(0)
+    """
     pt2 = pt2.pivot_table(values=['Mn/Start','Mn/Sub'], 
                         index=['Player','Nation','yob'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'weight2']))
+    """
+    pt_start = pt2.pivot_table(values=['Mn/Start'], 
+                        index=['Player','Nation','yob'], 
+                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'Starts']+1))
+    pt_sub = pt2.pivot_table(values=['Mn/Sub'], 
+                        index=['Player','Nation','yob'], 
+                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'Subs']+pt2.loc[rows.index, 'unSub']+1))
     avg = pd.read_excel(f'{path}/fbref/{standard}.xlsx','Sheet1')
     avg['CC'] = avg['Ast'] + avg['KP']
     avg_save_pct = 100*avg['Saves'].sum()/avg['SoTA'].sum() 
@@ -723,8 +751,8 @@ def mean_reversion():
     avg['Touch%'] = 1/11
     avg['Goals%'] = 1/11
     avg['Assist%'] = 1/11
-    avg['Mn/Start'] = pt2['Mn/Start'].mean()
-    avg['Mn/Sub'] = pt2['Mn/Sub'].mean()
+    avg['Mn/Start'] = pt_start['Mn/Start'].mean()
+    avg['Mn/Sub'] = pt_sub['Mn/Sub'].mean()
     avg = avg.drop(labels=['Min'])
     
     pos = pos.reset_index()
@@ -739,13 +767,16 @@ def mean_reversion():
     df_agg2 = df_agg2.reset_index()
     #df_agg2['PKsv%'] *= 100 
     pt = pt.reset_index()
-    pt2 = pt2.reset_index()
+    #pt2 = pt2.reset_index()
+    pt_start = pt_start.reset_index()
+    pt_sub = pt_sub.reset_index()
     df_agg = df_agg2.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pos.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = team.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = age.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg = pt.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
-    df_agg = pt2.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
+    df_agg = pt_start.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
+    df_agg = pt_sub.merge(df_agg, left_on=['Player','Nation','yob'], right_on=['Player','Nation','yob'])
     df_agg['TklW'] = 100*df_agg['TklW']/df_agg['Tkl']
     df_agg['TklW'] = df_agg['TklW'].fillna(0)
     df_agg['PKcon%'] = 100*df_agg['PK']/df_agg['PKatt_x_x']
@@ -905,7 +936,7 @@ def league_projections(league,custom_lineups,custom_mins):
     return table
 
 def h2h(t1,t2,custom_lineups,custom_mins):
-    #t1='Liverpool';t2='Newcastle United';custom_lineups=1;custom_mins=1
+    #t1='Sunderland';t2='Chelsea';custom_lineups=1;custom_mins=1
     m1,k1,o1 = lineup_projection(t1,custom_lineups,custom_mins,1)
     m2,k2,o2 = lineup_projection(t2,custom_lineups,custom_mins,1)
     
@@ -1047,7 +1078,7 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     match_df = match_df[['Player','Nation','FT_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR','Fls_Pen','win','loss']]
     match_df = fantasy_points(match_df)
     match_df['Mins'] = match_df['p(90/G)'] * 90
-    match_df = match_df[['Player','club','FT_Pos','Mins','Points']]
+    match_df = match_df[['Player','club','FT_Pos','Mins','Points','npG','pG','A']]
     return match_df,[round(t1_g,2),t1,round(t1_win,3),round(draw,3),round(t2_win,3),t2,round(t2_g,2)]
 
 def fantasy_points(df):
@@ -1076,8 +1107,8 @@ def fantasy_points(df):
 def position_mapping(df):
     mapping = {'DF,MF': 'DF', 'GK': 'GK', 'DF': 'DF', 'MF': 'MF', 'FW': 'FW', 
                'FW,MF': 'MF', 'DF,FW': 'DF', 'MF,FW': 'FW', 'DF,MF,FW':'DF',
-               'FW,DF,MF':'DF','FW,MF,DF':'FW','MF,FW,DF':'MF','MF,DF':'MF',
-               'MF,DF,FW':'MF','FW,DF':'DF','DF,FW,MF':'DF','GK,FW,MF':'FW', 
+               'FW,DF,MF':'DF', 'FW,MF,DF':'FW', 'MF,FW,DF':'MF', 'MF,DF':'MF',
+               'MF,DF,FW':'MF', 'FW,DF':'DF', 'DF,FW,MF':'DF', 'GK,FW,MF':'FW', 
                'FW,MF,GK':'FW', 'MF,GK':'MF', 'GK,MF':'MF', 'FW,GK':'FW' }
     df['mapped_Pos'] = df['Pos'].map(mapping)
     return df
@@ -1098,6 +1129,15 @@ def gw_projections(gw,custom_lineups,custom_mins):
     summary.columns = summary.iloc[0];summary = summary.drop(0)
     summary = summary.apply(pd.to_numeric, errors='ignore')
     return points,summary
+
+def overwrite_squads(new_squads):
+    old_squads = pd.read_excel(f'{path}/projections.xlsx','squads')
+    squads = old_squads.merge(new_squads, left_on=['Player','Nation','Age'], right_on=['Player','Nation','Age'], how='outer')
+    squads['club_x'] = squads['club_x'].fillna(squads['club_y'])
+    squads = squads.rename(columns={'club_x': 'club', 'season_x': 'season'})
+    squads = squads[[ 'Player', 'Nation', 'club', 'Age', 'p(90/G)', 'Start', 'Sub', 'FT_Pos']]
+    squads = squads.drop_duplicates()
+    return squads
 
 #%% extract data
 #extract team stats for multiple leagues and years
@@ -1120,10 +1160,10 @@ projections = mean_reversion()
 #to identify players whose data has been duplicated due to yob mismatch
 duplicates = projections.pivot_table(values=['season'], index=['Player','Nation','Age'], aggfunc='count')
 duplicates = duplicates[duplicates['season']>1]
-squads = projections[['Player', 'Nation', 'club', 'Age']]
+squads = overwrite_squads(projections[['Player', 'Nation', 'club', 'Age']])
 
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-#points,summary = h2h('Newcastle United','Liverpool',1,1) #home team, away team, custom lineups, custom mins
-points,summary = gw_projections(3,0,0) #match week, custom lineups, custom mins
+points,_ = h2h('Cremonese','Sassuolo',1,1) #home team, away team, custom lineups, custom mins
+#points,summary = gw_projections(3,0,0) #match week, custom lineups, custom mins
