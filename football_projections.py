@@ -27,15 +27,15 @@ from sklearn.metrics import mean_squared_error, r2_score
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
-path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
-#path = "C:/Users/uttam/Desktop/Sports/football"
+#path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
+path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'championship','liga portugal','eredivisie','serie b','belgian pro league',
                  'brazilian serie a','mls','liga mx',
                  'champions league','europa league','conference league']
 
 proj_year = 2026
-standard = 'serie a'
+standard = 'premier league'
 
 #%% functions
 headers = {
@@ -1165,5 +1165,5 @@ squads = overwrite_squads(projections[['Player', 'Nation', 'club', 'Age']])
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points,_ = h2h('Cremonese','Sassuolo',1,1) #home team, away team, custom lineups, custom mins
+points,_ = h2h('Aston Villa','Crystal Palace',1,1) #home team, away team, custom lineups, custom mins
 #points,summary = gw_projections(3,0,0) #match week, custom lineups, custom mins
