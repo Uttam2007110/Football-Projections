@@ -845,7 +845,7 @@ def mean_reversion():
            'PrgP', 'Assist%', 'CC', 'Carries', 'PrgC', 'Tkl', 'TklW', 'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld','CrdY','CrdR']
     
     #write to file instead of returning
-    with pd.ExcelWriter(f'{path}/projections.xlsx', engine='openpyxl', mode='a', if_sheet_exists='overlay') as writer:
+    with pd.ExcelWriter(f'{path}/projections.xlsx', engine='openpyxl', mode='a', if_sheet_exists='replace') as writer:
         projections_copy.to_excel(writer, sheet_name=f'{standard}', index=True)
     return projections_copy
 
@@ -953,7 +953,7 @@ def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     
 def league_projections(league,custom_lineups,custom_mins):    
     table = [['Team','Points','GF/90','GA/90']]
-    team_list = pd.read_excel(f'{path}/projections.xlsx','teams')
+    team_list = pd.read_excel(f'{path}/calibration.xlsx','teams')
     team_list = list(team_list[league])
     for t in team_list:
         pts,gf,ga = lineup_projection(t,custom_lineups,custom_mins,0)
