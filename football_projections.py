@@ -4,7 +4,7 @@ Created on Wed Sep 18 16:33:12 2024
 football player projections from fbref data
 @author: Subramanya.Ganti
 """
-#%% initialize
+#%% imports
 import numpy as np
 import pandas as pd
 pd.options.mode.chained_assignment = None  # default='warn'
@@ -27,6 +27,7 @@ from sklearn.metrics import mean_squared_error, r2_score
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
+#%% initializations
 path = "C:/Users/Subramanya.Ganti/Downloads/Sports/football"
 #path = "C:/Users/uttam/Desktop/Sports/football"
 valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
@@ -143,6 +144,87 @@ def fbref_team_ids(season,code):
     urls['season'] = season
     urls = urls[['team','code','season']]
     return urls
+
+def fbref_schedule():
+    valid_codes = [9,11,12,13,20]; all_lineup_data = []; all_leagues_match_links = []  
+    
+    for x in valid_codes:
+        code,league = league_mapping(x)
+        url = f'https://fbref.com/en/comps/{code}/schedule/{league}-Scores-and-Fixtures'    
+        data  = requests.get(url,verify=False,headers=headers).text
+        soup = BeautifulSoup(data,"html.parser")
+        #tables = soup.find_all('table')
+        
+        all_match_links = []
+        match_links = soup.find_all('a', href=lambda href: href and '/en/matches/' in href and len(href.split('/')) == 5)
+        for link in match_links:
+            #match_name = link.get_text(strip=True)
+            match_url = link.get('href')
+            all_match_links += [match_url]
+            
+        all_match_links = list(dict.fromkeys(all_match_links))
+        if(code in [9,11,12]): all_match_links = all_match_links[-10:]
+        elif(code in [13,20]): all_match_links = all_match_links[-9:]
+        else: all_match_links = all_match_links[-10:]
+        all_leagues_match_links += all_match_links
+    
+    print("Latest lineups extraction")
+    for l in all_leagues_match_links:
+        lineup_data_l = fbref_lineups('https://fbref.com'+l)
+        all_lineup_data.append(lineup_data_l)
+    
+    all_lineup_data = pd.concat(all_lineup_data)
+    all_lineup_data['club'] = all_lineup_data['club'].str.replace('-',' ')
+    return all_lineup_data
+    
+def fbref_lineups(url2):
+    #url2 = 'https://fbref.com/en/matches/07e76b58/Sassuolo-Napoli-August-23-2025-Serie-A'
+    data2  = requests.get(url2,verify=False,headers=headers).text
+    soup2 = BeautifulSoup(data2,"html.parser")
+    
+    team_links = soup2.select('strong a')
+    teams = [link['href'] for link in team_links]
+    #teams = list(set(teams))
+    teams = list(dict.fromkeys(teams))
+    teams = [item for item in teams if 'squads' in item]
+    teams = [item.split("/")[-1] for item in teams]
+    teams = [item.replace('-Stats', '') for item in teams]
+    
+    tables = soup2.find_all('table')
+    #first_table = tables[0] if len(tables) > 0 else None
+    #second_table = tables[1] if len(tables) > 1 else None
+    all_player_info = []
+    
+    for c in [0,1]:
+        player_links = tables[c].find_all('a', href=lambda href: href and '/en/players/' in href and len(href.split('/')) == 5)
+        #team_name = tables[c].find('th').get_text().split(" (")[0]
+        team_name = teams[c]
+        print(team_name)
+        player_info = []
+        for link in player_links:
+            player_name = link.get_text(strip=True)
+            player_url = link.get('href')
+    
+            if player_url:
+                # Extract the player ID from the URL (e.g., /en/players/PLAYER_ID/PLAYER_NAME)
+                parts = player_url.split('/')
+                if len(parts) >= 4:
+                    player_id = parts[3]  # The ID is typically the 4th part of the URL path
+    
+                    player_info.append({
+                        'name': player_name,
+                        'id': player_id
+                    })    
+        player_info = pd.DataFrame(player_info)
+        player_info = player_info.drop_duplicates()
+        player_info['club'] = team_name
+        player_info['Start'] = 0
+        player_info.loc[:10, 'Start'] = 1
+        player_info['Sub'] = 1 - player_info['Start']
+        all_player_info.append(player_info)
+        
+    all_player_info = pd.concat(all_player_info)
+    return all_player_info
 
 def player_stats(club,code,season,league_code):
     if(league_code in [8,19,882,14,676,685,1]):
@@ -668,11 +750,12 @@ def mean_reversion():
     df['TotCmp%'] = df['TotCmp%'].fillna(coeffs.loc[coeffs['variable']=='TotCmp%','mean'].sum())
     df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW','blkSh',
         'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%', 'Goals%', 'Assist%',
-        'PKatt%','PK','PKatt_x_x', 'SoT', 'CC','PKsv','PKatt_y','CrdY','CrdR','Mn/Start','Mn/Sub']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW',
+        'PKatt%','PK','PKatt_x_x', 'SoT', 'CC','PKsv','PKatt_y','CrdY','CrdR']] = df[['Touches','Sh','TotAtt','PrgP','Carries','PrgC','Tkl','TklW',
                                                                                  'blkSh', 'blkPass', 'Int', 'Clr','Err','Fls', 'Fld','Touch%', 
                                                                                  'Goals%', 'Assist%','PKatt%', 'PK','PKatt_x_x', 'SoT', 'CC',
-                                                                                 'PKsv','PKatt_y','CrdY','CrdR','Mn/Start','Mn/Sub']].fillna(0)
-                                                                                                    
+                                                                                 'PKsv','PKatt_y','CrdY','CrdR']].fillna(0)
+    
+                                                                                                          
     #df['PKsv%'] = df['PKsv']/df['PKatt_y']
     df1 = df.pivot_table(values=['Min', 'Touches', 'o_Touches', 'Sh', 'TotAtt', 'PrgP', 'Carries', 'PrgC', 'Tkl', 'TklW', 
                                  'blkSh', 'blkPass', 'Int', 'Clr', 'Err', 'Fls', 'Fld', 'Starts', 'Subs', 
@@ -742,7 +825,11 @@ def mean_reversion():
     #review this
     pt2 = pt.copy()
     pt2 = pt2[pt2['season']>2017]
-    pt2[['Mn/Start','Mn/Sub']] = pt2[['Mn/Start','Mn/Sub']].fillna(0)
+    #pt2[['Mn/Start','Mn/Sub']] = pt2[['Mn/Start','Mn/Sub']].fillna(0)
+    pt2['Mn/Start'] = pt2['Mn/Start'].fillna(df['Mn/Start'].mean())
+    pt2['Mn/Sub'] = pt2['Mn/Sub'].fillna(0)
+    pt2['start_weight'] = pt2['Starts'] * pt2['weight'] + 0.0001
+    pt2['sub_weight'] = (pt2['Subs']+pt2['unSub']) * pt2['weight'] + 0.0001
     pt = pt.pivot_table(values=['Min%','Starts','Subs','unSub'], 
                         index=['id'], 
                         aggfunc=lambda rows: np.average(rows, weights=pt.loc[rows.index, 'weight']))
@@ -753,10 +840,10 @@ def mean_reversion():
     """
     pt_start = pt2.pivot_table(values=['Mn/Start'], 
                         index=['id'], 
-                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'Starts']+1))
+                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'start_weight']))
     pt_sub = pt2.pivot_table(values=['Mn/Sub'], 
                         index=['id'], 
-                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'Subs']+pt2.loc[rows.index, 'unSub']+1))
+                        aggfunc=lambda rows: np.average(rows, weights=pt2.loc[rows.index, 'sub_weight']))
     avg = pd.read_excel(f'{path}/fbref/{standard}.xlsx','Sheet1')
     avg['CC'] = avg['Ast'] + avg['KP']
     avg_save_pct = 100*avg['Saves'].sum()/avg['SoTA'].sum() 
@@ -1095,7 +1182,7 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     draw = skellam.pmf(0,t1_g,t2_g)
     t1_win = 1-skellam.cdf(0,t1_g,t2_g)
     t2_win = skellam.cdf(-1,t1_g,t2_g)
-    print(t1,round(t1_win,3),"draw",round(draw,3),t2,round(t2_win,3))
+    print(t1,round(t1_win,4),"draw",round(draw,4),t2,round(t2_win,4))
     print(t1,'goals',round(t1_g,2),'CS%',round(100*t1_cs,2))
     print(t2,'goals',round(t2_g,2),'CS%',round(100*t2_cs,2))
     
@@ -1112,12 +1199,12 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     match_df = position_mapping(match_df)
     match_df['FT_Pos'] = match_df['FT_Pos'].fillna(match_df['mapped_Pos'])
     
-    match_df = match_df[['Player','Nation','FT_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR','Fls_Pen','win','loss','PKatt%']]
+    match_df = match_df[['Player','Nation','Pos','FT_Pos','club','Age','p(90/G)','npG','pG','pMiss','A','SoT','CC','TotCmp%','GC','CS%','Saves','pSaves','TklW','Int','CBIT','CrdY','CrdR','Fls_Pen','win','loss','PKatt%']]
     match_df = fantasy_points(match_df)
     match_df['G'] = match_df['npG'] + match_df['pG']
     match_df['Mins'] = match_df['p(90/G)'] * 90
-    match_df = match_df[['Player','club','FT_Pos','Mins','Points','G','A','PKatt%']]
-    return match_df,[round(t1_g,2),t1,round(t1_win,3),round(draw,3),round(t2_win,3),t2,round(t2_g,2)]
+    match_df = match_df[['Player','club','Pos','Mins','G','A','PKatt%']]
+    return match_df,[round(t1_g,2),t1,round(t1_win,4),round(draw,4),round(t2_win,4),t2,round(t2_g,2)]
 
 def fantasy_points(df):
     #appearance and >60 mins
@@ -1182,6 +1269,32 @@ def overwrite_squads(new_squads):
     squads = squads.drop_duplicates()
     return squads
 
+def squads_latest_playing_time():
+    start_sub_latest = fbref_schedule()
+    current_squads = pd.read_excel(f'{path}/calibration.xlsx','squads')
+    current_squads['id'] = current_squads['id'].astype(str)
+    new_squads = current_squads.merge(start_sub_latest, left_on=['id'], right_on=['id'], how='left')
+    new_squads['club_x'] = new_squads['club_x'].mask(new_squads['club_y'].notna(), new_squads['club_y'])
+    new_squads['Start_x'] = new_squads['Start_y']
+    new_squads['Sub_x'] = new_squads['Sub_y']
+    new_squads = new_squads.rename(columns={'Player_x': 'Player', 'Start_x': 'Start', 'club_x': 'club', 'Sub_x': 'Sub'})
+    new_squads = new_squads[['id' ,'Player', 'Nation', 'club', 'Age', 'p(90/G)', 'Start', 'Sub', 'FT_Pos']]
+    return new_squads
+
+def EV_calculator(t1_odds,draw_odds,t2_odds,summary):
+    df = pd.DataFrame(columns=['team','EV', 'current odds', 'EV neutral odds', 'implied probability', 'model probability'])
+    ev_t1 = (t1_odds-1)*summary[2] - (1-summary[2])
+    ev_draw = (draw_odds-1)*summary[3] - (1-summary[3])
+    ev_t2 = (t2_odds-1)*summary[4] - (1-summary[4])
+    neutral_t1 = 1 + (1-summary[2])/summary[2]
+    neutral_draw = 1 + (1-summary[3])/summary[3]
+    neutral_t2 = 1 + (1-summary[4])/summary[4]
+    df.loc[len(df)] = [summary[1], ev_t1, t1_odds, neutral_t1, 1/t1_odds, summary[2]]
+    df.loc[len(df)] = ['draw', ev_draw, draw_odds, neutral_draw, 1/draw_odds, summary[3]]
+    df.loc[len(df)] = [summary[5], ev_t2, t2_odds, neutral_t2, 1/t2_odds, summary[4]]
+    #print(df)
+    return df
+
 #%% extract data
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
@@ -1200,13 +1313,15 @@ aging = aging_analysis(0) #0 to generate them, 1 to read from the file
 
 #%% generate player projections
 projections = mean_reversion()
-#to identify players whose data has been duplicated due to yob mismatch
-#duplicates = projections.pivot_table(values=['season'], index=['id'], aggfunc='count')
-#duplicates = duplicates[duplicates['season']>1]
 squads = overwrite_squads(projections[['id','Player', 'Nation', 'club', 'Age']])
+
+#%%call fbref to get the latest squad info
+squads = squads_latest_playing_time()
 
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points,_ = h2h('Arsenal','Nottingham Forest',1,1) #home team, away team, custom lineups, custom mins
-#points,summary = gw_projections(3,0,0) #match week, custom lineups, custom mins
+points,summary = h2h('Crystal Palace','Sunderland',1,1) #home team, away team, custom lineups, custom mins
+
+#%% EV calculation
+ev = EV_calculator(1.67,4.17,5.56,summary) #t1, draw, t2 odds
