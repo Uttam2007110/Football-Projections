@@ -36,7 +36,7 @@ valid_leagues = ['serie a','bundesliga','premier league','la liga','ligue un',
                  'champions league','europa league','conference league']
 
 proj_year = 2026
-standard = 'ligue un'
+standard = 'premier league'
 
 #%% functions
 headers = {
@@ -145,8 +145,34 @@ def fbref_team_ids(season,code):
     urls = urls[['team','code','season']]
     return urls
 
+def extract_fixtures_info(code):
+    code,league = league_mapping(code)
+    url = f'https://fbref.com/en/comps/{code}/schedule/{league}-Scores-and-Fixtures'    
+    data  = requests.get(url,verify=False,headers=headers).text
+    soup = BeautifulSoup(data,"html.parser")
+    #tables = soup.find_all('table')
+    
+    table = soup.find_all('table') # Adjust ID as needed
+    if not table[0]:
+        print("Table not found. Check the ID or class name.")
+        exit()
+        
+    headers_df = [th.text.strip() for th in table[0].find('thead').find_all('th')]
+    datat = []
+    for row in table[0].find('tbody').find_all('tr'):
+        cols = row.find_all(['th', 'td']) # Includes potential header cells within tbody
+        cols = [ele.text.strip() for ele in cols]
+        datat.append(cols)
+        
+    df = pd.DataFrame(datat, columns=headers_df)
+    df = df[df['Wk'] != '']
+    df = df[['Wk', 'Day', 'Home', 'Away','Venue']]
+    df['league'] = league
+    return df
+    
+    
 def fbref_schedule():
-    valid_codes = [9,11,12,13,20]; all_lineup_data = []; all_leagues_match_links = []  
+    valid_codes = [9,11,12,13,20,23,32,37]; all_lineup_data = []; all_leagues_match_links = []  
     
     for x in valid_codes:
         code,league = league_mapping(x)
@@ -164,14 +190,19 @@ def fbref_schedule():
             
         all_match_links = list(dict.fromkeys(all_match_links))
         if(code in [9,11,12]): all_match_links = all_match_links[-10:]
-        elif(code in [13,20]): all_match_links = all_match_links[-9:]
+        elif(code in [13,20,23,32]): all_match_links = all_match_links[-9:]
+        elif(code in [37]): all_match_links = all_match_links[-8:]
         else: all_match_links = all_match_links[-10:]
         all_leagues_match_links += all_match_links
     
     print("Latest lineups extraction")
     for l in all_leagues_match_links:
-        lineup_data_l = fbref_lineups('https://fbref.com'+l)
-        all_lineup_data.append(lineup_data_l)
+        time.sleep(6.01)
+        try:
+            lineup_data_l = fbref_lineups('https://fbref.com'+l)
+            all_lineup_data.append(lineup_data_l)
+        except IndexError:
+            print(l,"skipped")
     
     all_lineup_data = pd.concat(all_lineup_data)
     all_lineup_data['club'] = all_lineup_data['club'].str.replace('-',' ')
@@ -347,6 +378,41 @@ def player_stats(club,code,season,league_code):
         merged_df['Age'] #its an integer, so no issue
     return merged_df
     
+def home_adv(init_season,end_season):
+    considered_leagues = ['serie a','bundesliga','premier league','la liga','ligue un']
+    summary_table = [['League','home factor','away factor']]
+    for l in considered_leagues:
+        l,code = code_mapping(l)
+        season = init_season; final = []
+        print(l)
+        while(season < end_season+1):
+            time.sleep(6.01); print(season)
+            ref = fbref_league_fixtures(season,code)
+            home_away = ref[1]
+            home_away.columns =  ['_'.join(col).strip() for col in home_away.columns.values]
+            home_away = home_away[['Unnamed: 1_level_0_Squad', 'Home_MP','Home_GF', 'Home_GA','Away_MP', 'Away_GF', 'Away_GA']]
+            home_away.columns = ['Squad', 'Home_MP','Home_GF', 'Home_GA','Away_MP', 'Away_GF', 'Away_GA']
+            home_away['season'] = season
+            final.append(home_away)
+            season += 1
+            
+        final = pd.concat(final)
+        final = final.pivot_table(values=['Home_MP','Home_GF', 'Home_GA','Away_MP', 'Away_GF', 'Away_GA'],index=['season'],aggfunc='sum')
+        final['Home_factor'] = 2*final['Home_GF']/(final['Home_GF']+final['Away_GF'])
+        final['Away_factor'] = 2*final['Away_GF']/(final['Home_GF']+final['Away_GF'])
+        final = final.reset_index()
+        final['weight'] = np.exp(final['season'] - proj_year)
+        final['weight'] *=  final['Home_MP']
+        final['weight'] /= final['weight'].sum()
+        
+        home_f = (final['weight']*final['Home_factor']).sum()
+        away_f = (final['weight']*final['Away_factor']).sum()
+        summary_table.append([l,home_f,away_f])
+    
+    head = summary_table.pop(0)
+    summary_table = pd.DataFrame(summary_table, columns=head)
+    return summary_table
+
 def team_stats(init_season,end_season,code):
     season = init_season; final = []
     while(season < end_season+1):
@@ -531,7 +597,7 @@ def multi_team_links(start,end,code):
     return raw
 
 def new_season_data(s):
-    for l in valid_leagues: #['brazilian serie a','mls']:
+    for l in ['champions league']: #valid_leagues:
         print(l)
         l,c = code_mapping(l)
         try:
@@ -547,7 +613,7 @@ def new_season_data(s):
 
 def extract_player_data(convert,target):
     df_all = []
-    #exceptions = pd.read_excel(f'{path}/calibration.xlsx','exceptions')
+    exceptions = pd.read_excel(f'{path}/calibration.xlsx','exceptions')
     #exceptions['yob'] = proj_year - exceptions['Age'] - 1  
     #name_changes = pd.read_excel(f'{path}/calibration.xlsx','name changes')
     for l in valid_leagues:
@@ -559,6 +625,12 @@ def extract_player_data(convert,target):
                  'PKatt_x','SoT','Ast','CC', 'PKatt_y', 'PKA', 'PKsv', 'PKm','CrdY','CrdR','npxG','xAG']]
         df['id'] = df['id'].astype(str)
         df['yob'] = df['season'] - df['Age']
+        df = df.merge(exceptions, on=['Player','Nation'], how='left')
+        df['new_id'] = df['new_id'].fillna(df['id'])
+        #fbref ids length is 8
+        #df['id'] = np.where(df['id'].str.len() != 8, df['new_id'], df['id'])
+        df['id'] = df['new_id']
+        df = df.drop('new_id', axis=1)
         """
         if(l in ['brazilian serie a','mls']): 
             df['yob'] -= 1
@@ -622,8 +694,12 @@ def league_conversion_factors(read_file):
                     to_df = to_df[to_df['Pos']=='GK']
                 
                 df_from_to = to_df.merge(from_df, left_on=['id','season'], right_on=['id','season+1'])
+                df_from_to_ss = to_df.merge(from_df, left_on=['id','season'], right_on=['id','season'])
+                df_from_to = pd.concat([df_from_to,df_from_to_ss])
                 #print("from",c[0],"to",c[1],(df_from_to[f'{ch}_x'].sum()/df_from_to['Min_x'].sum())/(df_from_to[f'{ch}_y'].sum()/df_from_to['Min_y'].sum()))
                 df_to_from = from_df.merge(to_df, left_on=['id','season'], right_on=['id','season+1'])
+                df_to_from_ss = from_df.merge(to_df, left_on=['id','season'], right_on=['id','season'])
+                df_to_from = pd.concat([df_to_from,df_to_from_ss])
                 #print("from",c[1],"to",c[0],(df_to_from[f'{ch}_x'].sum()/df_to_from['Min_x'].sum())/(df_to_from[f'{ch}_y'].sum()/df_to_from['Min_y'].sum()))
                 
                 eqn.loc[r,c[0]] = 1
@@ -1057,7 +1133,9 @@ def league_projections(league,custom_lineups,custom_mins):
     table = [['Team','Points','GF/90','GA/90']]
     team_list = pd.read_excel(f'{path}/calibration.xlsx','teams')
     team_list = list(team_list[league])
+    team_list = [x for x in team_list if str(x) != 'nan']
     for t in team_list:
+        print(t)
         pts,gf,ga = lineup_projection(t,custom_lineups,custom_mins,0)
         table.append([t,pts,gf,ga])
     table = pd.DataFrame(table)
@@ -1114,7 +1192,14 @@ def h2h(t1,t2,custom_lineups,custom_mins):
     avg['weight'] *= avg['Starts']
     avg['weight'] /= sum(avg['weight'])
     avg = (avg['weight']*avg['G_per_game']).sum()
-    home_adv = 0.1 # research this in detail
+    
+    home_adv_data = pd.read_excel(f'{path}/calibration.xlsx','home adv')
+    home_adv = ((home_adv_data.loc[home_adv_data['League']==standard,'home factor']-1) - (home_adv_data.loc[home_adv_data['League']==standard,'away factor']-1))/2
+    try:
+        home_adv = home_adv.values[0]
+    except IndexError:
+        #home_adv = 0.1 # research this in detail
+        home_adv = ((home_adv_data['home factor'].mean()-1) - (home_adv_data['away factor'].mean()-1))/2
     lg_avg_touches = 625 #check if this is 600 or 625
     
     #t1_g = (avg/avg_goals) * gf1 * ga2 / avg_goals
@@ -1255,30 +1340,49 @@ def position_mapping(df):
     df['mapped_Pos'] = df['Pos'].map(mapping)
     return df
 
-def gw_projections(gw,custom_lineups,custom_mins):
-    points = []; summary = [['Home Goals','Home','Home win%','Draw%','Away win%','Away','Away Goals']]
-    fixtures = pd.read_excel(f'{path}/projections.xlsx',f'{standard} schedule')
-    fixtures = fixtures[fixtures['Wk']==gw]
-    fixtures = fixtures[['Home','Away']]
-    for h,a in fixtures.values:
-        pg,sg = h2h(h,a,custom_lineups,custom_mins)
-        points.append(pg)
-        summary.append(sg)
+def gw_projections(gw,day,custom_lineups,custom_mins,use_odds,bankroll):
+    print()
+    points = []; summary = [['Home Goals','Home','Home win%','Draw%','Away win%','Away','Away Goals']]; ev = []
+    fixtures = pd.read_excel(f'{path}/calibration.xlsx','schedule')
+    
+    if(day == ''): fixtures = fixtures[(fixtures['Wk']==gw)&(fixtures['league']==standard)]
+    else: fixtures = fixtures[(fixtures['Wk']==gw)&(fixtures['league']==standard)&(fixtures['Day']==day)]
+    fixtures = fixtures[['Home','Away','t1 yes','draw yes','t2 yes','t1 no','draw no','t2 no']]
+    fixtures = fixtures.fillna(0)
+    
+    for h,a,t1y,dy,t2y,t1n,dn,t2n in fixtures.values:
+        if(use_odds == 0):
+            pg,sg = h2h(h,a,custom_lineups,custom_mins)
+            points.append(pg)
+            summary.append(sg)
+        else:
+            if(t1y == 0):
+                print("no data for",h,"vs",a)
+            else:
+                pg,sg = h2h(h,a,custom_lineups,custom_mins)
+                evg = EV_calculator(t1y,dy,t2y,t1n,dn,t2n,sg)
+                points.append(pg)
+                summary.append(sg)
+                ev.append(evg)
         print()
     points = pd.concat(points)
-    points = points.sort_values(by='Points', ascending=False)
+    points = points.sort_values(by='Mins', ascending=False)
     summary = pd.DataFrame(summary)
     summary.columns = summary.iloc[0];summary = summary.drop(0)
     summary = summary.apply(pd.to_numeric, errors='ignore')
-    return points,summary
+    if(use_odds != 0): 
+        ev = pd.concat(ev)
+        ev['bet'] = bankroll*ev['kelly']/ev['kelly'].sum()
+        ev['bet'] = ev['bet'].round(decimals=1)
+    return points,summary,ev
 
 def overwrite_squads(new_squads):
     old_squads = pd.read_excel(f'{path}/calibration.xlsx','squads')
     old_squads['id'] = old_squads['id'].astype(str)
     #new_squads['id'] = new_squads['id'].astype(str)
     squads = old_squads.merge(new_squads, left_on=['id'], right_on=['id'], how='outer')
-    squads['Player'] = squads['Player_x'].fillna(squads['Player_y'])
-    squads['Nation'] = squads['Nation_x'].fillna(squads['Nation_y'])
+    squads['Player_x'] = squads['Player_x'].fillna(squads['Player_y'])
+    squads['Nation_x'] = squads['Nation_x'].fillna(squads['Nation_y'])
     squads['club_x'] = squads['club_x'].fillna(squads['club_y'])
     squads['Age_x'] = squads['Age_x'].fillna(squads['Age_y'])
     squads = squads.rename(columns={'Player_x': 'Player', 'Nation_x': 'Nation', 'club_x': 'club', 'season_x': 'season', 'Age_x': 'Age'})
@@ -1288,6 +1392,12 @@ def overwrite_squads(new_squads):
 
 def squads_latest_playing_time():
     start_sub_latest = fbref_schedule()
+    exceptions = pd.read_excel(f'{path}/calibration.xlsx','exceptions')
+    start_sub_latest = start_sub_latest.merge(exceptions, left_on=['name'], right_on=['Player'], how='left')
+    start_sub_latest['new_id'] = start_sub_latest['new_id'].fillna(start_sub_latest['id'])
+    start_sub_latest['id'] = start_sub_latest['new_id']
+    start_sub_latest = start_sub_latest[['name', 'id', 'club', 'Start', 'Sub']]
+    
     current_squads = pd.read_excel(f'{path}/calibration.xlsx','squads')
     current_squads['id'] = current_squads['id'].astype(str)
     new_squads = current_squads.merge(start_sub_latest, left_on=['id'], right_on=['id'], how='left')
@@ -1298,17 +1408,32 @@ def squads_latest_playing_time():
     new_squads = new_squads[['id' ,'Player', 'Nation', 'club', 'Age', 'p(90/G)', 'Start', 'Sub', 'FT_Pos']]
     return new_squads
 
-def EV_calculator(t1_odds,draw_odds,t2_odds,summary):
-    df = pd.DataFrame(columns=['team','EV', 'current odds', 'EV neutral odds', 'implied probability', 'model probability'])
+def EV_calculator(t1_odds,draw_odds,t2_odds,t1_no,draw_no,t2_no,summary):
+    df = pd.DataFrame(columns=['team','type','EV', 'current odds', 'EV neutral odds', 'implied probability', 'model probability'])
+    
     ev_t1 = (t1_odds-1)*summary[2] - (1-summary[2])
     ev_draw = (draw_odds-1)*summary[3] - (1-summary[3])
     ev_t2 = (t2_odds-1)*summary[4] - (1-summary[4])
     neutral_t1 = 1 + (1-summary[2])/summary[2]
     neutral_draw = 1 + (1-summary[3])/summary[3]
     neutral_t2 = 1 + (1-summary[4])/summary[4]
-    df.loc[len(df)] = [summary[1], ev_t1, t1_odds, neutral_t1, 1/t1_odds, summary[2]]
-    df.loc[len(df)] = ['draw', ev_draw, draw_odds, neutral_draw, 1/draw_odds, summary[3]]
-    df.loc[len(df)] = [summary[5], ev_t2, t2_odds, neutral_t2, 1/t2_odds, summary[4]]
+    
+    ev_t1_no = (t1_no-1)*(1-summary[2]) - summary[2]
+    ev_draw_no = (draw_no-1)*(1-summary[3]) - summary[3]
+    ev_t2_no = (t2_no-1)*(1-summary[4]) - summary[4]
+    neutral_t1_no = 1 + summary[2]/(1-summary[2])
+    neutral_draw_no = 1 + summary[3]/(1-summary[3])
+    neutral_t2_no = 1 + summary[4]/(1-summary[4])
+    
+    df.loc[len(df)] = [summary[1],'yes', ev_t1, t1_odds, neutral_t1, 1/t1_odds, summary[2]]
+    df.loc[len(df)] = [f'draw ({summary[1]} {summary[5]})','yes', ev_draw, draw_odds, neutral_draw, 1/draw_odds, summary[3]]
+    df.loc[len(df)] = [summary[5],'yes', ev_t2, t2_odds, neutral_t2, 1/t2_odds, summary[4]]
+    df.loc[len(df)] = [summary[1],'no', ev_t1_no, t1_no, neutral_t1_no, 1/t1_no, 1-summary[2]]
+    df.loc[len(df)] = [f'draw ({summary[1]} {summary[5]})','no', ev_draw_no, draw_no, neutral_draw_no, 1/draw_no, 1-summary[3]]
+    df.loc[len(df)] = [summary[5],'no', ev_t2_no, t2_no, neutral_t2_no, 1/t2_no, 1-summary[4]]
+    
+    df['kelly'] = df['model probability']-(1-df['model probability'])/(df['current odds']-1)
+    df['kelly'] = df['kelly'].where(df['kelly'] >= 0, 0)
     #print(df)
     return df
 
@@ -1326,7 +1451,8 @@ new_season_data(proj_year-1)
 #summary,t_stats_reg,lasso,coeffs = regression(t_stats,0.001,'Pts') # target variables can be - GF, GA, xG, xGA, GD, xGD, Pts
 #player projection data
 factors = league_conversion_factors(0) #0 to generate them, 1 to read from the file
-aging = aging_analysis(0) #0 to generate them, 1 to read from the file
+#aging = aging_analysis(0) #0 to generate them, 1 to read from the file
+home_advantage = home_adv(2017,2025)
 
 #%% generate player projections
 projections = mean_reversion()
@@ -1336,9 +1462,19 @@ squads = overwrite_squads(projections[['id','Player', 'Nation', 'club', 'Age']])
 squads = squads_latest_playing_time()
 
 #%% points projections
-#lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins
+#lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins, return all stats
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points,summary = h2h('Auxerre','Monaco',1,1) #home team, away team, custom lineups, custom mins
+points,summary = h2h('Liverpool','Everton',1,1) #home team, away team, custom lineups, custom mins
 
 #%% EV calculation
-ev = EV_calculator(5,4.55,1.64,summary) #t1, draw, t2 odds
+"""
+#t1_yes, draw_yes, t2_yes, t1_no, draw_no, t2_no odds
+ev = EV_calculator(1.54,
+                   4.55,
+                   6.67,
+                   2.78,
+                   1.25,
+                   1.16,
+                   summary)
+"""
+points,summary,ev = gw_projections(5,'Fri',1,1,1,20) #gw, game day, custom lineups, custom mins, use odds data, bankroll
