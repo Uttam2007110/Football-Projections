@@ -23,6 +23,8 @@ from datetime import datetime
 from sklearn.linear_model import Lasso
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -78,10 +80,25 @@ def code_mapping(league):
 def fbref_league_fixtures(season,code):
     code,league = league_mapping(code)
     if(code in [24,21,22,14]):
-        table = pd.read_html(f'https://fbref.com/en/comps/{code}/{season}/{season}-{league}-Stats')
+        url = f'https://fbref.com/en/comps/{code}/{season}/{season}-{league}-Stats'
     else:
-        table = pd.read_html(f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats')
-    return table
+        url = f'https://fbref.com/en/comps/{code}/{season}-{season+1}/{season}-{season+1}-{league}-Stats'
+    #take care to verify why this bypass is needed
+    data  = requests.get(url,verify=False,headers=headers).text
+    soup = BeautifulSoup(data,"html.parser")
+    tables = soup.find_all('table')
+    
+    ref = []
+    for i, table in enumerate(tables):
+        try:
+            # pd.read_html can directly parse a table element converted to string
+            df = pd.read_html(StringIO(str(table)))[0]
+            ref.append(df)
+            #print(f"Table {i+1} successfully converted to DataFrame.")
+        except Exception as e:
+            print(f"Could not convert Table {i+1} to DataFrame: {e}")
+        
+    return ref
 
 def opp_touches_error(start,end,code):
     all_ot = []
@@ -378,7 +395,7 @@ def player_stats(club,code,season,league_code):
         merged_df['Age'] #its an integer, so no issue
     return merged_df
     
-def home_adv(init_season,end_season):
+def home_adv_func(init_season,end_season):
     considered_leagues = ['serie a','bundesliga','premier league','la liga','ligue un']
     summary_table = [['League','home factor','away factor']]
     for l in considered_leagues:
@@ -596,8 +613,8 @@ def multi_team_links(start,end,code):
     raw = pd.concat(raw)
     return raw
 
-def new_season_data(s):
-    for l in ['champions league']: #valid_leagues:
+def new_season_data(s,considered_leagues):
+    for l in considered_leagues: #valid_leagues:
         print(l)
         l,c = code_mapping(l)
         try:
@@ -1016,6 +1033,134 @@ def mean_reversion():
         projections_copy.to_excel(writer, sheet_name=f'{standard}', index=True)
     return projections_copy
 
+def player_value(df, pid, q):    
+    coeffs = pd.read_excel(f'{path}/calibration.xlsx','model coefficients')
+    coeffs = coeffs.drop('Unnamed: 0', axis=1)
+    gf = pd.read_excel(f'{path}/calibration.xlsx','GF')
+    gf = gf.drop('Unnamed: 0', axis=1)
+    ga = pd.read_excel(f'{path}/calibration.xlsx','GA')
+    ga = ga.drop('Unnamed: 0', axis=1)
+    
+    all_gk = df[df['Cluster']=='GK']
+    all_gk = all_gk[all_gk['p(90/G)']>=0.1]
+    all_gk = all_gk.quantile(q,numeric_only=True) #, skipna=True
+    all_gk['Pos'] = 'GK'
+    all_cb = df[df['Cluster']=='CB']
+    all_cb = all_cb[all_cb['p(90/G)']>=0.1]
+    all_cb = all_cb.quantile(q,numeric_only=True) #, skipna=True
+    all_cb['Pos'] = 'CB'
+    all_mf = df[df['Cluster']=='FB,MF']
+    all_mf = all_mf[all_mf['p(90/G)']>=0.1]
+    all_mf = all_mf.quantile(q,numeric_only=True) #, skipna=True
+    all_mf['Pos'] = 'FB,MF'
+    all_fw = df[df['Cluster']=='FW']
+    all_fw = all_fw[all_fw['p(90/G)']>=0.1]
+    all_fw = all_fw.quantile(q,numeric_only=True) #, skipna=True
+    all_fw['Pos'] = 'FW'
+    
+    player_stats = df[df['id']==pid] #'f7036e1c' using lautaro martinez as an example
+    
+    c=0; value=[]
+    while(c<2):
+        df_team = pd.DataFrame(columns=df.columns)
+        df_team = pd.concat([df_team, 
+                              all_cb.to_frame().T,
+                              all_mf.to_frame().T,
+                              all_mf.to_frame().T,
+                              all_mf.to_frame().T,
+                              all_mf.to_frame().T,
+                              all_fw.to_frame().T,
+                              all_fw.to_frame().T],
+                             ignore_index=True)
+        
+        if(c==0):        
+            df_team = pd.concat([df_team, all_gk.to_frame().T, 
+                                  all_cb.to_frame().T,
+                                  all_mf.to_frame().T,
+                                  all_fw.to_frame().T],
+                                 ignore_index=True)
+            
+        elif(c!=0 and player_stats['Pos'].values[0]=='GK'):
+            df_team = pd.concat([df_team, player_stats, 
+                                  all_cb.to_frame().T,
+                                  all_mf.to_frame().T,
+                                  all_fw.to_frame().T],
+                                 ignore_index=True)
+            
+        elif(c!=0 and player_stats['Pos'].values[0]=='CB'):
+            df_team = pd.concat([df_team, player_stats, 
+                                  all_gk.to_frame().T,
+                                  all_mf.to_frame().T,
+                                  all_fw.to_frame().T],
+                                 ignore_index=True)
+            
+        elif(c!=0 and player_stats['Pos'].values[0]=='FW'):
+            df_team = pd.concat([df_team, player_stats, 
+                                  all_cb.to_frame().T,
+                                  all_mf.to_frame().T,
+                                  all_gk.to_frame().T],
+                                 ignore_index=True)
+    
+        else:
+             df_team = pd.concat([df_team, player_stats, 
+                                   all_cb.to_frame().T,
+                                   all_fw.to_frame().T,
+                                   all_gk.to_frame().T],
+                                  ignore_index=True)
+        
+        df_team['p(90/G)'] = 1
+        keepers = df_team[df_team['Pos']=='GK']    
+        keepers = keepers.sort_values(by='p(90/G)', ascending=False)
+        keepers['rank'] = list(range(1,len(keepers)+1))
+        outfielders = df_team[df_team['Pos']!='GK']
+        outfielders = outfielders.sort_values(by='p(90/G)', ascending=False)
+        outfielders['rank'] = list(range(1,len(outfielders)+1))
+        
+        touches = (outfielders['p(90/G)']*outfielders['Touches']).sum() + (keepers['p(90/G)']*keepers['Touches']).sum()
+        opp_touches = (outfielders['p(90/G)']*outfielders['o_Touches']).sum() + (keepers['p(90/G)']*keepers['o_Touches']).sum()
+        touch_pct = (outfielders['p(90/G)']*outfielders['Touch%']).sum() + (keepers['p(90/G)']*keepers['Touch%']).sum()
+        outfielders['o_Touches'] =  opp_touches/11
+        keepers['o_Touches'] =  opp_touches/11
+        outfielders['Touch%'] /=  touch_pct
+        keepers['Touch%'] /=  touch_pct
+        outfielders['Touches'] =  touches * outfielders['Touch%']
+        keepers['Touches'] =  touches * keepers['Touch%']
+        
+        measure = []
+        for m in ['Touches','o_Touches','Save%','Sh','TotAtt','TotCmp%','PrgP','Carries','PrgC','Tkl','TklW',
+                  'blkSh','blkPass','Int', 'Clr', 'Err', 'Fls', 'Fld']:
+            if(m in ['Touches','o_Touches','Save%']):
+                measure.append((outfielders[m] * outfielders['p(90/G)']).sum() + (keepers[m] * keepers['p(90/G)']).sum())
+            elif(m in ['TotCmp%']):
+                measure.append(((outfielders[m] * outfielders['TotAtt'] * outfielders['p(90/G)'] * outfielders['Touches']).sum() + (keepers[m] * keepers['TotAtt'] * keepers['p(90/G)'] * keepers['Touches']).sum())/measure[0])
+            elif(m in ['TklW']):
+                measure.append(((outfielders[m] * outfielders['Tkl'] * outfielders['p(90/G)'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['Tkl'] * keepers['p(90/G)'] * keepers['o_Touches']).sum())/measure[1])
+            elif(m in ['Tkl','blkSh','blkPass','Int', 'Clr', 'Err', 'Fls']):
+                measure.append(((outfielders[m] * outfielders['p(90/G)'] * outfielders['o_Touches']).sum() + (keepers[m] * keepers['p(90/G)'] * keepers['o_Touches']).sum())/measure[1])
+            elif(m in ['Sh','TotAtt','PrgP','Carries','PrgC','Fld']):
+                measure.append(((outfielders[m] * outfielders['p(90/G)'] * outfielders['Touches']).sum() + (keepers[m] * keepers['p(90/G)'] * keepers['Touches']).sum())/measure[0])
+        
+        measure[5]/= measure[4]
+        measure[10]/= measure[9]
+        #adding dominance and pace which are derived from touches and opp touches
+        measure.append(measure[0]/measure[1])
+        measure.append(measure[0]+measure[1])
+        
+        pts = (np.array(measure[2:]) - np.array(coeffs['mean'].to_list()[:-1])) / np.array(coeffs['stdev'].to_list()[:-1])
+        pts *= np.array(coeffs['weight'].to_list()[:-1])
+        pts = sum(pts) * coeffs.loc[coeffs['variable']=='pred','stdev'].sum()  + coeffs.loc[coeffs['variable']=='pred','mean'].sum()
+        gf_t = (np.array(measure[2:]) - np.array(gf['mean'].to_list()[:-1])) / np.array(gf['stdev'].to_list()[:-1])
+        gf_t *= np.array(gf['weight'].to_list()[:-1])
+        gf_t = sum(gf_t) * gf.loc[gf['variable']=='pred','stdev'].sum()  + gf.loc[gf['variable']=='pred','mean'].sum()
+        ga_t = (np.array(measure[2:]) - np.array(ga['mean'].to_list()[:-1])) / np.array(ga['stdev'].to_list()[:-1])
+        ga_t *= np.array(ga['weight'].to_list()[:-1])
+        ga_t = sum(ga_t) * ga.loc[ga['variable']=='pred','stdev'].sum()  + ga.loc[ga['variable']=='pred','mean'].sum()
+        #print(pts)
+        value.append(pts)
+        c+=1
+    
+    return value[1]-value[0]
+
 def lineup_projection(team,custom_lineups,custom_mins,return_all_stats):
     #team='Arsenal'; custom_mins=1; custom_lineups=1
     df = pd.read_excel(f'{path}/projections.xlsx',standard)
@@ -1433,16 +1578,73 @@ def EV_calculator(t1_odds,draw_odds,t2_odds,t1_no,draw_no,t2_no,summary):
     df.loc[len(df)] = [summary[5],'no', ev_t2_no, t2_no, neutral_t2_no, 1/t2_no, 1-summary[4]]
     
     df['kelly'] = df['model probability']-(1-df['model probability'])/(df['current odds']-1)
-    df['kelly'] = df['kelly'].where(df['kelly'] >= 0, 0)
+    #review this
+    df['kelly'] = df['kelly'].where(df['kelly'] >= 0.05, 0)
     #print(df)
     return df
+
+def valuations():
+    df = pd.read_excel(f'{path}/projections.xlsx',standard)
+    df = df.drop('Unnamed: 0', axis=1)
+    df['TklW'] = df['TklW'].fillna(60.58)
+    df['TklW'] = df['TklW'].replace([np.inf, -np.inf], 100)
+    
+    squads = pd.read_excel(f'{path}/calibration.xlsx','squads')
+    squads = squads.drop('Column1', axis=1)
+    
+    df['id'] = df['id'].astype(str)
+    squads['id'] = squads['id'].astype(str)
+    df = pd.merge(df, squads, on=['id'], how='left')
+    df['club_x'] = df['club_y']
+    #df['p(90/G)_x'] = df['p(90/G)_y']
+    df.rename(columns={'Player_x': 'Player', 'Nation_x': 'Nation', 'Age_x': 'Age', 'club_x': 'club', 'p(90/G)_x': 'p(90/G)'}, inplace=True)
+    df.drop(['Player_y','Nation_y','Age_y','club_y','p(90/G)_y'], axis=1, inplace=True)
+    df.drop(['Start','Sub','FT_Pos'], axis=1, inplace=True)
+    
+    scaled_data = df[['Touch%','Save%','Goals%','TotCmp%','Assist%','Tkl', 'Clr', 'Fls', 'Fld']]
+    scaled_data = scaled_data.fillna(0)
+    scaler = StandardScaler()
+    scaled_data = scaler.fit_transform(scaled_data.select_dtypes(include='number'))
+    kmeans = KMeans(n_clusters=4, random_state=42, n_init='auto')
+    clusters = kmeans.fit_predict(scaled_data)
+    
+    df['Cluster'] = clusters
+    mean_col1 = df.groupby('Cluster')['Goals%'].mean().sort_values().index
+    sorted_labels = {original: new for new, original in enumerate(mean_col1)}
+    df['Cluster'] = df['Cluster'].map(sorted_labels)
+    
+    category_map = {0: 'GK', 1: 'CB', 2: 'FB,MF', 3: 'FW'}
+    df['Cluster'] = df['Cluster'].map(category_map)
+    
+    team = pd.read_excel(f'{path}/calibration.xlsx','teams')
+    team = team[standard]
+    team = team.dropna().tolist()
+    
+    player_list = df[df['club'].isin(team)]
+    player_list = player_list[['id', 'Player', 'Nation', 'Pos', 'club','Cluster']]
+    median = []
+    lower = []
+    upper = []
+    
+    for x in player_list['id']:
+        print(player_list.loc[player_list['id']==x,'Player'].values[0])
+        median.append(player_value(df,x,0.5))
+        lower.append(player_value(df,x,0.25))
+        upper.append(player_value(df,x,0.75))
+    
+    player_list['GD lower quartile'] = lower
+    player_list['GD median'] = median
+    player_list['GD upper quartile'] = upper
+    return player_list
 
 #%% extract data
 #extract team stats for multiple leagues and years
 #t_stats = multi_leagues(0)
 #extract player stats for multiple leagues
 #player_stats_raw = multi_team_links(2021,2024,21)
-new_season_data(proj_year-1)
+new_season_data(proj_year-1,['serie a','bundesliga','premier league','la liga','ligue un',
+                 'championship','liga portugal','eredivisie','serie b','belgian pro league',
+                 'brazilian serie a','mls','liga mx','champions league','europa league','conference league'])
 #ote = opp_touches_error(2017,2024,9)
 
 #%% analyze
@@ -1452,7 +1654,7 @@ new_season_data(proj_year-1)
 #player projection data
 factors = league_conversion_factors(0) #0 to generate them, 1 to read from the file
 #aging = aging_analysis(0) #0 to generate them, 1 to read from the file
-home_advantage = home_adv(2017,2025)
+home_advantage = home_adv_func(2017,2025)
 
 #%% generate player projections
 projections = mean_reversion()
@@ -1461,10 +1663,13 @@ squads = overwrite_squads(projections[['id','Player', 'Nation', 'club', 'Age']])
 #%% call fbref to get the latest squad info
 squads = squads_latest_playing_time()
 
+#%% player valuations
+player_worth = valuations()
+
 #%% points projections
 #lineup_projection('Chelsea',0,0,0) #team, custom lineups, custom mins, return all stats
 #table = league_projections(standard,1,1) #team, custom lineups, custom mins
-points,summary = h2h('Liverpool','Everton',1,1) #home team, away team, custom lineups, custom mins
+points,summary = h2h('Chelsea','Nottingham Forest',1,1) #home team, away team, custom lineups, custom mins
 
 #%% EV calculation
 """
@@ -1477,4 +1682,4 @@ ev = EV_calculator(1.54,
                    1.16,
                    summary)
 """
-points,summary,ev = gw_projections(5,'Fri',1,1,1,20) #gw, game day, custom lineups, custom mins, use odds data, bankroll
+points,summary,ev = gw_projections(9,'',1,1,1,20) #gw, game day, custom lineups, custom mins, use odds data, bankroll
