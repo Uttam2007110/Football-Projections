@@ -1338,6 +1338,148 @@ def multi_season_team_extract(country,start,end):
         print()    
     return full_team_stats,full_regression_stats
 
+def multi_season_player_extract(country,start,end):
+    i=start; full_player_stats = []
+    while(i<=end):
+        print("season",i)
+        r,t,s,ss,slug = league_codes(country,i)
+        all_player_tables = players_data(r,t,s,ss,slug,argv=sys.argv[1:])
+        full_stats = player_stats_summarize(all_player_tables,i)
+        if(i==start):
+            full_player_stats = full_stats
+        else:
+            full_player_stats = pd.concat([full_stats,full_player_stats])
+        i+=1
+        print()
+    
+    #team_stats = pd.read_excel('C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored/Italy_teams.xlsx','Sheet1')
+    #full_player_stats = full_player_stats.merge(team_stats[['team','season','P','shotsConcededPerGame','GA']], on=['team','season'], how='left')
+    return full_player_stats
+
+def player_stats_summarize(all_tables,season):
+    analysis = all_tables['detailed_aerial_success']
+    analysis = analysis.reset_index()
+    analysis = analysis.rename(columns={'teamName': 'team'})
+    analysis = analysis[['playerId','name','age','height','weight','positionText','team','tournamentName','apps','minsPlayed']]
+    
+    aerials = all_tables['detailed_aerial_success']
+    aerials['aerial_win%'] = aerials['duelAerialWon']/aerials['duelAerialTotal']
+    aerials = aerials.reset_index()
+    aerials = aerials[['playerId','name','teamName','duelAerialTotal','aerial_win%']]
+    aerials = aerials.rename(columns={'teamName': 'team'})
+    
+    blocks = all_tables['detailed_blocks_type']
+    blocks = blocks.reset_index()
+    blocks = blocks[['playerId','name','teamName','outfielderBlock', 'passCrossBlockedDefensive', 'outfielderBlockedPass']]
+    blocks = blocks.rename(columns={'teamName': 'team','outfielderBlock':'Shots_blocked','passCrossBlockedDefensive':'Cross_blocked'})
+    
+    cards = all_tables['detailed_cards_type']
+    cards = cards.reset_index()
+    cards = cards[['playerId','name','teamName','yellowCard', 'redCard']]
+    cards = cards.rename(columns={'teamName': 'team'})
+    
+    clear = all_tables['detailed_clearances_success']
+    clear = clear.reset_index()
+    clear = clear[['playerId','name','teamName','clearanceTotal']]
+    clear = clear.rename(columns={'teamName': 'team'})
+    
+    dribbles = all_tables['detailed_dribbles_success']
+    dribbles = dribbles.reset_index()
+    dribbles = dribbles[['playerId','name','teamName','dribbleLost', 'dribbleWon', 'dribbleTotal']]
+    dribbles['dribble_win%'] = dribbles['dribbleWon']/dribbles['dribbleTotal']
+    dribbles = dribbles.rename(columns={'teamName': 'team'})
+    
+    fouls = all_tables['detailed_fouls_type']
+    fouls = fouls.reset_index()
+    fouls = fouls[['playerId','name','teamName','foulGiven', 'foulCommitted']]
+    fouls = fouls.rename(columns={'teamName': 'team'})
+    
+    interceptions = all_tables['detailed_interception_success']
+    interceptions = interceptions.reset_index()
+    interceptions = interceptions[['playerId','name','teamName','interceptionAll']]
+    interceptions = interceptions.rename(columns={'teamName': 'team'})
+    
+    passes = all_tables['detailed_passes_length']
+    passes = passes.reset_index()
+    passes['long_success%'] = passes['passLongBallAccurate']/(passes['passLongBallAccurate']+passes['passLongBallInaccurate'])
+    passes['short_success%'] = passes['shortPassAccurate']/(passes['shortPassAccurate']+passes['shortPassInaccurate'])
+    passes['long_bias'] = (passes['passLongBallAccurate']+passes['passLongBallInaccurate'])/(passes['shortPassAccurate']+passes['shortPassInaccurate'])
+    passes = passes[['playerId','name','teamName','passTotal', 'long_success%', 'short_success%', 'long_bias']]
+    passes = passes.rename(columns={'teamName': 'team'})
+    
+    kp = all_tables['detailed_key_passes_length']
+    kp = kp.reset_index()
+    kp = kp[['playerId','name','teamName','keyPassesTotal']]
+    kp = kp.rename(columns={'teamName': 'team'})
+    
+    offside = all_tables['detailed_offsides_type']
+    offside = offside.reset_index()
+    offside = offside[['playerId','name','teamName','offsideGiven']]
+    offside = offside.rename(columns={'teamName': 'team'})
+    
+    possloss = all_tables['detailed_possession_loss_type']
+    possloss = possloss.reset_index()
+    possloss = possloss[['playerId','name','teamName','turnover', 'dispossessed']]
+    possloss = possloss.rename(columns={'teamName': 'team'})
+    
+    saves = all_tables['detailed_saves_shotzone']
+    saves = saves.reset_index()
+    saves = saves[['playerId','name','teamName','saveTotal']]
+    saves = saves.rename(columns={'teamName': 'team'})
+    
+    shots = all_tables['detailed_shots_accuracy']
+    shots = shots.reset_index()
+    shots['shots_target%'] = shots['shotOnTarget']/shots['shotsTotal']
+    shots['shots_blocked%'] = shots['shotBlocked']/shots['shotsTotal']
+    shots = shots[['playerId','name','teamName','shotsTotal','shots_target%','shots_blocked%']]
+    shots = shots.rename(columns={'teamName': 'team'})
+    
+    tackles = all_tables['detailed_tackles_success']
+    tackles = tackles.reset_index()
+    tackles['tackle_success%'] = tackles['tackleWonTotal']/tackles['tackleTotalAttempted']
+    tackles = tackles[['playerId','name','teamName','tackleTotalAttempted','tackle_success%']]
+    tackles = tackles.rename(columns={'teamName': 'team'})
+
+    goals = all_tables['detailed_goals_zones']
+    goals = goals.reset_index()
+    goals = goals[['playerId','name','teamName','goalTotal']]
+    goals = goals.rename(columns={'teamName': 'team'})
+    
+    assists = all_tables['detailed_assists_type']
+    assists = assists.reset_index()
+    assists = assists[['playerId','name','teamName','assist']]
+    assists = assists.rename(columns={'teamName': 'team'})
+    
+    analysis = analysis.merge(aerials, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(blocks, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(cards, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(clear, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(dribbles, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(fouls, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(interceptions, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(passes, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(kp, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(possloss, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(offside, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(saves, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(shots, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(tackles, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(goals, on=['playerId','name','team'], how='left')
+    analysis = analysis.merge(assists, on=['playerId','name','team'], how='left')
+
+    analysis['season'] = season
+    #analysis['Save%'] = analysis['saveTotal']/(analysis['saveTotal']+analysis['GA'])
+    analysis['MPG'] = analysis['minsPlayed']/analysis['apps']
+    
+    
+    analysis = analysis[['playerId', 'name', 'age', 'season','height', 'weight', 'positionText', 'team', 'tournamentName', 'apps', 'minsPlayed',
+                         'MPG','duelAerialTotal', 'aerial_win%', 'Shots_blocked', 'Cross_blocked', 'outfielderBlockedPass', 'yellowCard', 'redCard',
+                         'clearanceTotal', 'dribbleLost', 'dribbleWon', 'dribbleTotal', 'dribble_win%', 'foulGiven', 'foulCommitted',
+                         'interceptionAll', 'passTotal', 'long_success%', 'short_success%', 'long_bias', 'keyPassesTotal', 'turnover','dispossessed',
+                         'offsideGiven', 'saveTotal', 'shotsTotal', 'shots_target%', 'shots_blocked%', 'tackleTotalAttempted', 'tackle_success%',
+                         'goalTotal', 'assist']]
+    return analysis
+
 def team_stats_summarize(all_tables,season):
     standings = all_tables['standings']
     standings = standings.reset_index()
@@ -1478,9 +1620,30 @@ def team_stats_summarize(all_tables,season):
                          'Head', 'aerial_win%', 'ShA', 'YC', 'RC','Save%']]
     return standings,analysis
 
+def calibrate_to_mean(pred, known_mean):
+    """Shift predictions so their mean matches a known observed mean.
+
+    The model is fitted on sqrt(target), so the shift is solved on that same
+    (link) scale rather than on the raw scale. Squaring back makes the
+    adjustment level-dependent -- high scorers move more than low scorers --
+    which preserves the ratio-like structure of the target and cannot produce
+    negative values, unlike a flat additive offset on the raw scale.
+
+    Solves mean((sqrt(pred) + d)**2) == known_mean for d:
+        d**2 + 2*mean(mu)*d + (mean(mu**2) - known_mean) = 0
+    """
+    pred = np.asarray(pred, dtype=float)
+    if not np.isfinite(known_mean):
+        return pred
+    mu = np.sqrt(np.clip(pred, 0, None))
+    a = mu.mean()
+    disc = a**2 - (mu**2).mean() + known_mean
+    if disc < 0:   # unreachable mean, fall back to plain scaling
+        return pred * (known_mean/pred.mean())
+    return (mu + (-a + np.sqrt(disc)))**2
+
 def team_stats_regresion(analysis,target,split_season):
     from xgboost import XGBRegressor
-    from sklearn.model_selection import train_test_split
     from sklearn.metrics import mean_squared_error, r2_score
     from sklearn.compose import TransformedTargetRegressor
     from sklearn.linear_model import RidgeCV
@@ -1528,11 +1691,22 @@ def team_stats_regresion(analysis,target,split_season):
     """
     reg_model.fit(X_train, y_train)
 
-    predictions = reg_model.predict(X_test)
     analysis[f'Pred_{target}'] = reg_model.predict(analysis[variables])
 
+    # Predictions shrink toward the training-era mean, so each season's total
+    # drifts away from what was actually observed. Re-anchor every season to its
+    # own known mean; seasons with no observed target yet are left untouched.
+    for season in analysis['season'].unique():
+        mask = (analysis['season'] == season).values
+        observed = analysis.loc[mask, target]
+        if observed.notna().all():
+            analysis.loc[mask, f'Pred_{target}'] = calibrate_to_mean(
+                analysis.loc[mask, f'Pred_{target}'], observed.mean())
+
+    predictions = analysis.loc[(analysis['season']>=split_season).values, f'Pred_{target}']
+
     mse = mean_squared_error(y_test, predictions)
-    train_r2 = r2_score(y_train, reg_model.predict(X_train))
+    train_r2 = r2_score(y_train, analysis.loc[(analysis['season']<split_season).values, f'Pred_{target}'])
     test_r2 = r2_score(y_test, predictions)
     
     print(target,"rmse is",mse**0.5)
@@ -1542,17 +1716,51 @@ def team_stats_regresion(analysis,target,split_season):
     return analysis
 
 #%% extract data
-#all_tables = teams_data(108,5,10732,24500,"italy-serie-a-2025-2026",argv=sys.argv[1:])
-#all_player_tables = players_data(108,5,2626,4659,"italy-serie-a-2010-2011",argv=sys.argv[1:])
+path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
+league = 'Netherlands'
+season_start = 2027
+season_end = 2027
+update_file = 0
 
-#r,t,s,ss,slug = league_codes('Spain',2022)
+#all_tables = teams_data(108,5,10732,24500,"italy-serie-a-2025-2026",argv=sys.argv[1:])
+#all_player_tables = players_data(108,5,10732,24500,"italy-serie-a-2025-2026",argv=sys.argv[1:])
+
+#r,t,s,ss,slug = league_codes('Europe',2017)
 #all_tables = teams_data(r,t,s,ss,slug,argv=sys.argv[1:])
 #full_stats,regression_stats = team_stats_summarize(all_tables,2022)
 
-full_stats,regression_stats = multi_season_team_extract('Spain',2011,2020)
+full_stats,regression_stats = multi_season_team_extract(league,season_start,season_end)
+#full_player_stats = multi_season_player_extract(league,season_start,season_end)
 
 #%% regerssion model
-regression_stats = team_stats_regresion(regression_stats,'Pts',2021)
-regression_stats = team_stats_regresion(regression_stats,'GF',2021)
-regression_stats = team_stats_regresion(regression_stats,'GA',2021)
+"""
+regression_stats = team_stats_regresion(regression_stats,'Pts',2022)
+regression_stats = team_stats_regresion(regression_stats,'GF',2022)
+regression_stats = team_stats_regresion(regression_stats,'GA',2022)
 regression_stats['Pred_GD'] = regression_stats['Pred_GF'] - regression_stats['Pred_GA']
+"""
+#%% edit existing files
+"""
+if(update_file == 1):
+    old_team_stats = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet1')
+    old_reg_stats = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet2')
+    old_player_stats = pd.read_excel(f'{path}/{league}_players.xlsx','Sheet1')
+    
+    for s in range(season_start,season_end+1):
+        old_team_stats = old_team_stats[old_team_stats['season']!=s]
+        old_reg_stats = old_reg_stats[old_reg_stats['season']!=s]
+        old_player_stats = old_player_stats[old_player_stats['season']!=s]
+        
+    old_team_stats = pd.concat([old_team_stats,full_stats])
+    old_reg_stats = pd.concat([old_reg_stats,regression_stats])
+    old_player_stats = pd.concat([old_player_stats,full_player_stats])
+    
+    old_team_stats = old_team_stats.sort_values(by=['season'], ascending=[False])
+    old_reg_stats = old_reg_stats.sort_values(by=['season'], ascending=[False])
+    old_player_stats = old_player_stats.sort_values(by=['season'], ascending=[False])
+    
+    with pd.ExcelWriter(f'{path}/{league}_teams.xlsx', engine='openpyxl') as writer:
+        old_team_stats.to_excel(writer, index=False, sheet_name='Sheet1')
+        old_reg_stats.to_excel(writer, index=False, sheet_name='Sheet2')
+    old_player_stats.to_excel(f'{path}/{league}_players.xlsx', index=False, sheet_name='Sheet1')
+"""
