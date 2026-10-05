@@ -15,10 +15,10 @@ from patsy import dmatrix
 pd.options.mode.chained_assignment = None
 
 path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
+#path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
 
 season = 2027
 project_league = 'Italy'
-read_files = 1
 
 #%% functions
 def player_stats_extract(league):
@@ -421,21 +421,40 @@ def regression_player_full(full_player_stats,league_strength,season):
     return reg_stats
 
 def relevant_team_label(target_league,team_clusters,season):
-    tc = team_clusters[team_clusters["label"].str.contains(f"{target_league}_")]
+    tc = team_clusters.copy()
+    if(target_league == 'Germany2'):
+        tc['alternate'] = np.where(tc['label'].str.contains('Germany_'),'Germany2_0',pd.NA)
+    elif(target_league == 'England2'):
+        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England2_0',pd.NA)
+    elif(target_league == 'Germany'):
+        tc['alternate'] = np.where(tc['label'].str.contains('Germany2_'),'Germany_2',pd.NA)
+    elif(target_league == 'England'):
+        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England_2',pd.NA)
+    else:
+        tc['alternate'] = pd.NA
+    
+    teams_list = tc[tc['label'].str.contains(f"{target_league}_")]
+    teams_list = teams_list[teams_list['season']==season]['team'].drop_duplicates().to_list()
+    
+    tc = tc[tc['team'].isin(teams_list)]
+    tc.reset_index(drop=True, inplace=True)
+    tc['label'] = np.where(tc['alternate'].notna(),tc['alternate'],tc['label'])
+    full_range = pd.DataFrame({"season": range(tc["season"].min(), tc["season"].max() + 1)})
+    full_range['team'] = [teams_list] * len(full_range)
+    full_range = full_range.explode('team').reset_index(drop=True)
+    tc = full_range.merge(tc, on=['team','season'], how='left')
+    tc['label'] = tc['label'].fillna(f'{target_league}_2')
+    tc['P'] = tc['P'].fillna(30)
+    #tc = team_clusters[team_clusters["label"].str.contains(f"{target_league}_")]
     tc['weight'] = np.exp(tc['season']-season) * tc['P'] / 0.75
     tc['num'] = (tc['label'].str[-1:]).astype(int)
+    
     tc_pivot = tc.pivot_table(index='team',values='num',aggfunc=lambda x: np.average(x, weights=tc.loc[x.index, 'weight']))
     tc_season = tc.pivot_table(index='team',values='season',aggfunc='max')
     tc_pivot['season'] = tc_season
-    tc_pivot = tc_pivot.reset_index()
-    
-    if(len(tc_pivot[tc_pivot['season']==season])==0):
-        tc_pivot = tc_pivot[tc_pivot['season']==season-1]
-    else:
-        tc_pivot = tc_pivot[tc_pivot['season']==season]
-       
+    tc_pivot = tc_pivot.reset_index()       
     tc_pivot['label'] = target_league + "_" + round(tc_pivot['num'],0).astype(int).astype(str)
-    tc_pivot = tc_pivot[['team','label']]
+    tc_pivot = tc_pivot[['team','label','num']]
     return tc_pivot
 
 def projections_target_league(target_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season):
@@ -483,9 +502,12 @@ def team_stats_regresion(league,target):
     from sklearn.gaussian_process import GaussianProcessRegressor
     from sklearn.gaussian_process.kernels import RBF, WhiteKernel
 
-    variables = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
-                 'KP','TO%','Drb','dribble_win%', 'FlsW', 'FlsC', 'Tkl','tackle_success%', 'Int','Blk','Clr', 'Off',
-                 'Head', 'aerial_win%', 'YC', 'RC', 'ShA','Save%'] #
+    if(target == 'Pts'):
+        variables = ['GF','GA','GD']
+    else:
+        variables = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
+                     'KP','TO%','Drb','dribble_win%', 'FlsW', 'FlsC', 'Tkl','tackle_success%', 'Int','Blk','Clr', 'Off',
+                     'Head', 'aerial_win%', 'YC', 'RC', 'ShA','Save%']
 
     analysis = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet2')
     analysis['ShA'] *= analysis['P']
@@ -609,13 +631,13 @@ def league_table(target_league,df):
     #predictions
     gf = model_gf.predict(totals_df)
     ga = model_ga.predict(totals_df)
-    pts = model_pts.predict(totals_df)
     gf_factor = lg_avg_gf/gf.mean()
     ga_factor = lg_avg_ga/ga.mean()
-    pts_factor = lg_avg_pts/pts.mean()
     totals_df['GF'] = gf * gf_factor
     totals_df['GA'] = ga * ga_factor
     totals_df['GD'] = totals_df['GF'] - totals_df['GA']
+    pts = model_pts.predict(totals_df[['GF','GA','GD']])
+    pts_factor = lg_avg_pts/pts.mean()
     totals_df['Pts'] = pts * pts_factor
     totals_df['teams'] = team_list
     totals_df = totals_df[['teams','GF','GA','GD','Pts']]
@@ -668,7 +690,7 @@ if(False): #read_files == 1
     player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
     player_bio = player_bio.drop(columns=['Unnamed: 0'])
 
-regressed_stats_adj,_ = projections_target_league(project_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season)
+regressed_stats_adj,tc = projections_target_league(project_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season)
 
 #%% game level results
 standings,_,_,_ = league_table(project_league,regressed_stats_adj)
