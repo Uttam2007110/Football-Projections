@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 Created on Tue Sep 22 15:24:55 2026
-
+game projections using plyer level data from whoscored
 @author: Subramanya.Ganti
 """
 
@@ -12,13 +12,16 @@ from itertools import combinations
 from sklearn import linear_model
 import statsmodels.api as sm
 from patsy import dmatrix
+from scipy.stats import poisson
+from scipy.stats import skellam
 pd.options.mode.chained_assignment = None
+np.seterr(divide='ignore', invalid='ignore')
 
 path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
 #path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
 
 season = 2027
-project_league = 'Italy'
+project_league = 'England'
 
 #%% functions
 def player_stats_extract(league):
@@ -229,7 +232,7 @@ def league_conversions(df_full,season):
             #print(ch,round(factor,2))
             r+=1
             
-        eqn[list(range(0,len(df)))] = eqn[list(range(0,len(df)))].fillna(0.0) #.infer_objects(copy=False)
+        eqn[list(range(0,len(df)))] = eqn[list(range(0,len(df)))].fillna(0.0).infer_objects(copy=False)
         eqn.replace([np.inf, -np.inf], np.nan, inplace=True)
         eqn = eqn[eqn[f'{ch} log factor'].notna()]
         
@@ -385,7 +388,7 @@ def age_delta(age_delta_models, stat, age_x, age_y):
 def player_stats_extract_all():
     df = []; df_teams = []
     leagues = ['England','Spain','Germany','Italy','France','Netherlands','Turkey','Portugal','Belgium','Scotland','Russia',
-               'Germany2','England2']
+               'Germany2','England2','Brazil','USA','England3','England4']
     for l in leagues:
         pl,tl = player_stats_extract(l)
         pl['league'] = l
@@ -407,17 +410,41 @@ def player_stats_extract_all():
     return df_players,team_labels
 
 def regression_player_full(full_player_stats,league_strength,season):
-    gk = full_player_stats[full_player_stats['positionText']=='Goalkeeper']
-    df = full_player_stats[full_player_stats['positionText']=='Defender']
-    md = full_player_stats[full_player_stats['positionText']=='Midfielder']
-    fw = full_player_stats[full_player_stats['positionText']=='Forward']
+    from sklearn.cluster import KMeans
+    from sklearn.preprocessing import StandardScaler
+    from sklearn.experimental import enable_iterative_imputer
+    from sklearn.impute import IterativeImputer
     
-    gk_reg = regression_player(gk,league_strength,season)
-    df_reg = regression_player(df,league_strength,season)
-    md_reg = regression_player(md,league_strength,season)
-    fw_reg = regression_player(fw,league_strength,season)
+    #gk = full_player_stats[full_player_stats['positionText']=='Goalkeeper']
+    #df = full_player_stats[full_player_stats['positionText']=='Defender']
+    #md = full_player_stats[full_player_stats['positionText']=='Midfielder']
+    #fw = full_player_stats[full_player_stats['positionText']=='Forward']
+    #gk_reg = regression_player(gk,league_strength,season)
+    #df_reg = regression_player(df,league_strength,season)
+    #md_reg = regression_player(md,league_strength,season)
+    #fw_reg = regression_player(fw,league_strength,season)    
+    #reg_stats = pd.concat([gk_reg,df_reg,md_reg,fw_reg])
     
-    reg_stats = pd.concat([gk_reg,df_reg,md_reg,fw_reg])
+    categories = ['height','weight','ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head',
+                  'G%','A%','Save%','dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
+                  'tackle_success%','aerial_win%','PssA']
+    kmeans = KMeans(n_clusters=8, init='k-means++', random_state=0)
+    
+    clustering_player_stats = full_player_stats.copy()
+    clustering_player_stats = clustering_player_stats[clustering_player_stats['minsPlayed']>500]
+    scaler = StandardScaler()
+    imputer = IterativeImputer()
+    kmeans.fit(imputer.fit_transform(scaler.fit_transform(clustering_player_stats[categories])))
+    full_player_stats['cluster'] = kmeans.predict(imputer.fit_transform(scaler.fit_transform(full_player_stats[categories])))
+    player_labels = full_player_stats.groupby('playerId')['cluster'].apply(lambda x: x.value_counts().idxmax()).reset_index()
+    full_player_stats = full_player_stats.merge(player_labels, on='playerId', how='left')
+    
+    reg_stats = [];
+    for c in full_player_stats['cluster_y'].drop_duplicates():
+        cn = full_player_stats[full_player_stats['cluster_y']==c]
+        reg_stats.append(regression_player(cn,league_strength,season))
+    
+    reg_stats = pd.concat(reg_stats)
     return reg_stats
 
 def relevant_team_label(target_league,team_clusters,season):
@@ -426,10 +453,22 @@ def relevant_team_label(target_league,team_clusters,season):
         tc['alternate'] = np.where(tc['label'].str.contains('Germany_'),'Germany2_0',pd.NA)
     elif(target_league == 'England2'):
         tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England2_0',pd.NA)
+        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England2_2',tc['alternate'])
+        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England2_2',tc['alternate'])
+    elif(target_league == 'England3'):
+        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England3_0',pd.NA)
+        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England3_0',tc['alternate'])
+        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England3_2',tc['alternate'])
+    elif(target_league == 'England4'):
+        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England4_0',pd.NA)
+        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England4_0',tc['alternate'])
+        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England4_0',tc['alternate'])
     elif(target_league == 'Germany'):
         tc['alternate'] = np.where(tc['label'].str.contains('Germany2_'),'Germany_2',pd.NA)
     elif(target_league == 'England'):
         tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England_2',pd.NA)
+        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England_2',tc['alternate'])
+        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England_2',tc['alternate'])
     else:
         tc['alternate'] = pd.NA
     
@@ -534,7 +573,174 @@ def team_stats_regresion(league,target):
     #print(target,"rmse is",mse**0.5)
     #print(target,"train R^2 is",train_r2)
     #print()
-    return reg_model,target_mean #!!! should be league average value
+    return reg_model,target_mean
+
+def player_target_credits(players, training_teams, model, target):
+    """Allocate absolute credits and minutes-weighted, position-centred ratings."""
+    VARIABLES = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
+                 'KP','TO%','Drb','dribble_win%', 'FlsW', 'FlsC', 'Tkl','tackle_success%', 'Int','Blk','Clr', 'Off',
+                 'Head', 'aerial_win%', 'YC', 'RC', 'ShA','Save%']
+
+    if(players.empty):
+        raise ValueError("Player dataframe is empty")
+    if(players[['playerId','team','positionText']].isna().any().any()):
+        raise ValueError("Every player row requires playerId, team and positionText")
+
+    reference_stats = training_teams[VARIABLES].mean()
+    if(not np.isfinite(reference_stats.to_numpy(dtype=float)).all()):
+        raise ValueError("Training reference contains NaN or infinity")
+
+    def team_features(frame):
+        # Minutes were adjusted once below; do not multiply by appearance probability again.
+        _, totals = mins_adjustment(frame.assign(play=1).copy(), 0)
+        features = totals.loc[VARIABLES].to_frame().T.astype(float)
+        if(not np.isfinite(features.to_numpy()).all()):
+            invalid = features.columns[~np.isfinite(features.to_numpy()).all(axis=0)].tolist()
+            raise ValueError(f"{team}: invalid aggregated inputs: {invalid}")
+        return features
+
+    records, team_records = [], []
+
+    for team, raw in players.groupby('team', sort=False):
+        raw = raw.copy()
+        if(not np.isfinite(raw[['MPG','play']].to_numpy(dtype=float)).all()):
+            raise ValueError(f"{team}: MPG or play contains NaN or infinity")
+        if((raw[['MPG','play']] < 0).any().any()):
+            raise ValueError(f"{team}: MPG and play must be non-negative")
+        raw = raw.loc[(raw['MPG'] * raw['play']) > 0].copy()
+        keepers = raw['positionText'].eq('Goalkeeper')
+        if(raw.empty or not keepers.any() or keepers.all()):
+            raise ValueError(f"{team}: positive goalkeeper and outfield minutes are required")
+
+        actual, _ = mins_adjustment(raw.copy(), 0)
+        actual = actual.reset_index(drop=True)
+        minutes = actual['MPG'].to_numpy(dtype=float)
+        if(not np.isfinite(minutes).all() or (minutes <= 0).any()):
+            raise ValueError(f"{team}: invalid adjusted player minutes")
+        total_minutes = minutes.sum()
+        reference = actual.copy()
+
+        # Construct per-90 reference counts that aggregate to the mean team inputs.
+        own_passes = reference_stats['Pace'] * reference_stats['possession']
+        against_passes = reference_stats['Pace'] * (1-reference_stats['possession'])
+        factor = 90/total_minutes
+        reference['Pss'] = own_passes * factor
+        reference['PssA'] = against_passes * factor
+
+        own_rates = ['Sh','Drb','FlsW','Clr','TO%','KP']
+        against_rates = ['ShA','Tkl','Int','Blk','Off','YC','RC','Head']
+        for stat in own_rates:
+            reference[stat] = reference_stats[stat] * own_passes * factor
+        for stat in against_rates:
+            reference[stat] = reference_stats[stat] * against_passes * factor
+        reference['Fls'] = reference_stats['FlsC'] * against_passes * factor
+
+        percentages = ['long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
+                       'dribble_win%','tackle_success%','aerial_win%']
+        for stat in percentages:
+            reference[stat] = reference_stats[stat]
+
+        keepers = reference['positionText'].eq('Goalkeeper')
+        keeper_minutes = reference.loc[keepers, 'MPG'].sum()
+        if(keeper_minutes <= 0):
+            raise ValueError(f"No goalkeeper minutes for {team}")
+        reference['Save%'] = 0.0
+        reference.loc[keepers, 'Save%'] = reference_stats['Save%'] * 90/keeper_minutes
+
+        reference_inputs = team_features(reference)
+        if(not np.allclose(reference_inputs.iloc[0], reference_stats, rtol=1e-6, atol=1e-10)):
+            raise ValueError(f"Reference aggregation does not reproduce training means for {team}")
+
+        player_ids = actual['playerId'].drop_duplicates().to_numpy()
+        masks = [actual['playerId'].eq(pid).to_numpy() for pid in player_ids]
+        player_minutes = np.array([minutes[mask].sum() for mask in masks])
+        minute_share = player_minutes/player_minutes.sum()
+
+        # Build all hypothetical team inputs, then predict them together.
+        feature_rows = [reference_inputs, team_features(actual)]
+        
+        for mask in masks:
+            reference_with_player = reference.copy()
+            reference_with_player.loc[mask, :] = actual.loc[mask, :]
+            actual_without_player = actual.copy()
+            actual_without_player.loc[mask, :] = reference.loc[mask, :]
+            feature_rows.extend([team_features(reference_with_player), team_features(actual_without_player)])
+        
+        X_batch = pd.concat(feature_rows, ignore_index=True)
+        predictions = np.asarray(model.predict(X_batch), dtype=float)
+        if(predictions.ndim != 1 or len(predictions) != 2 + 2*len(player_ids)):
+            raise ValueError(f"{team}: expected one prediction per hypothetical team, got {predictions.shape}")
+        if(not np.isfinite(predictions).all()):
+            raise ValueError(f"{team}: model predictions contain NaN or infinity")
+        
+        reference_value, team_prediction = predictions[:2]
+        player_predictions = predictions[2:].reshape(len(player_ids), 2)
+        
+        # Player added to the reference team.
+        standalone = player_predictions[:, 0] - reference_value
+        
+        # Player's effect in their actual team.
+        actual_context = team_prediction - player_predictions[:, 1]
+        
+        # Approximate Shapley using the two endpoint contexts.
+        approximate_marginal = 0.5 * (standalone + actual_context)
+        
+        # Reconcile the approximation so credits sum exactly to the team prediction.
+        baseline_credit = reference_value * minute_share
+        unadjusted_credit = baseline_credit + approximate_marginal
+        allocation_residual = team_prediction - unadjusted_credit.sum()
+        residual_credit = minute_share * allocation_residual
+        allocated_credit = unadjusted_credit + residual_credit
+
+        # Remove floating-point summation residue only.
+        anchor = np.argmax(player_minutes)
+        roundoff = team_prediction - allocated_credit.sum()
+        allocated_credit[anchor] += roundoff
+        residual_credit[anchor] += roundoff
+
+        marginal = allocated_credit - baseline_credit
+        standalone_credit = baseline_credit + standalone
+        reconstructed = allocated_credit.sum()
+        if(not np.isclose(reconstructed, team_prediction, rtol=1e-9, atol=1e-10)):
+            raise ValueError(f"{team}: reconstructed={reconstructed}, predicted={team_prediction}")
+
+        for i, pid in enumerate(player_ids):
+            position_minutes = actual.loc[masks[i]].groupby('positionText', sort=False)['MPG'].sum()
+            for position, mins in position_minutes.items():
+                share = mins/player_minutes[i]
+                records.append({'playerId': pid, 'team': team, 'positionText': position, 'minutes': mins,
+                                'actual_credit': allocated_credit[i]*share, 'above_reference': marginal[i]*share,
+                                'residual_credit': residual_credit[i]*share,
+                                'standalone_credit': standalone_credit[i]*share,
+                                'standalone_impact': standalone[i]*share})
+
+        team_records.append({'team': team, f'Pred_{target}': team_prediction,
+                             f'Reconstructed_{target}': reconstructed,
+                             'allocation_residual': allocation_residual})
+
+    detail = pd.DataFrame(records)
+    if(detail.empty):
+        raise ValueError("No players to evaluate")
+
+    position_groups = detail.groupby('positionText', sort=False)
+    position_minutes = position_groups['minutes'].transform('sum')
+    for credit, prefix in [('actual_credit', target), ('standalone_credit', f'{target}_standalone')]:
+        position_mean = position_groups[credit].transform('sum')/position_minutes
+        detail[f'{prefix}_position_mean'] = position_mean
+        detail[f'{prefix}_position_adjusted_per_min'] = detail[credit]/detail['minutes'] - position_mean
+        detail[f'{prefix}_position_adjusted_credit'] = detail[credit] - detail['minutes']*position_mean
+
+    # One output row per unique playerId, including players appearing for multiple teams.
+    result = detail.groupby('playerId', sort=False)[['minutes','actual_credit','above_reference',
+                                                    'residual_credit','standalone_credit','standalone_impact']].sum()
+    result[f'{target}_per_min'] = result['actual_credit']/result['minutes']
+    result[f'{target}_above_ref_per_min'] = result['above_reference']/result['minutes']
+    result[f'{target}_standalone_per_min'] = result['standalone_credit']/result['minutes']
+    result[f'{target}_standalone_impact_per_min'] = result['standalone_impact']/result['minutes']
+    for prefix in [target, f'{target}_standalone']:
+        adjusted = detail.groupby('playerId', sort=False)[f'{prefix}_position_adjusted_credit'].sum()
+        result[f'{prefix}_position_adjusted_per_min'] = adjusted/result['minutes']
+    return result, detail, pd.DataFrame(team_records)
 
 def mins_adjustment(df,game_level):
     variables = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
@@ -641,37 +847,115 @@ def league_table(target_league,df):
     totals_df['Pts'] = pts * pts_factor
     totals_df['teams'] = team_list
     totals_df = totals_df[['teams','GF','GA','GD','Pts']]
+    totals_df = totals_df.sort_values(by=['Pts'], ascending=[False])
     return totals_df,gf_factor,ga_factor,pts_factor
 
-def game_engine(target_league,home,away,df): 
+def game_engine(gw,target_league,df,custom_lineups):
+    player_df = []
+    summary = [['Home Goals','Home','Home win%','Draw%','Away win%','Away','Away Goals']]
+    #standings
     standings,gf_factor,ga_factor,pts_factor = league_table(project_league,df)
-    
-    df_home = df[df['team']==home]
-    df_away = df[df['team']==away]
-    #mins adjustments - starters 900, subs 90 (verify this)
-    df_home,home_totals = mins_adjustment(df_home,1)
-    df_away,away_totals = mins_adjustment(df_away,1)
-    home_totals = home_totals.to_frame().T
-    away_totals = away_totals.to_frame().T
+    #extract fixtures
+    fixtures = pd.read_excel(f'{path}/schedule.xlsx',target_league)
+    fixtures = fixtures[fixtures['GW']==gw]
+    home_teams = fixtures['Home'].to_list()
+    away_teams = fixtures['Away'].to_list()
     #model calibration for league
     model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
     model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
-    #game level predictions
-    home_gf = model_gf.predict(home_totals) * gf_factor
-    home_ga = model_ga.predict(home_totals) * ga_factor
-    away_gf = model_gf.predict(away_totals) * gf_factor
-    away_ga = model_ga.predict(away_totals) * ga_factor
-    #print(home_gf,home_ga,away_gf,away_ga,gf_factor,ga_factor)
-    game_gf = home_gf * away_ga / lg_avg_ga
-    game_ga = home_ga * away_gf / lg_avg_ga
-    game_gf = game_gf.sum()
-    game_ga = game_ga.sum()
+    #home advantage, last years numbers
+    if(target_league == 'Italy'): home_f=1.07; away_f=.93
+    elif(target_league == 'Germany'): home_f=1.084; away_f=.915
+    elif(target_league == 'Germany2'): home_f=1.09; away_f=.91
+    elif(target_league == 'England'): home_f=1.09; away_f=.91
+    elif(target_league == 'Spain'): home_f=1.13; away_f=.87
+    elif(target_league == 'France'): home_f=1.13; away_f=.87
+    elif(target_league == 'England2'): home_f=1.11; away_f=.89
+    elif(target_league == 'Turkey'): home_f=1.15; away_f=.85
+    elif(target_league == 'Netherlands'): home_f=1.12; away_f=.88
+    elif(target_league == 'Portugal'): home_f=1.08; away_f=.92
+    else: home_f=1.1; away_f=.9
 
-    print(home,round(game_gf,2),"-",round(game_ga,2),away)
-    return standings
+    for t in range(0,len(home_teams)):
+        df_home = df[df['team']==home_teams[t]]
+        df_away = df[df['team']==away_teams[t]]
+        #mins adjustments - starters 900, subs 90 (verify this)
+        df_home,home_totals = mins_adjustment(df_home,custom_lineups)
+        df_away,away_totals = mins_adjustment(df_away,custom_lineups)
+        home_totals = home_totals.to_frame().T
+        away_totals = away_totals.to_frame().T
+        #game level predictions
+        home_gf = model_gf.predict(home_totals) * gf_factor
+        home_ga = model_ga.predict(home_totals) * ga_factor
+        away_gf = model_gf.predict(away_totals) * gf_factor
+        away_ga = model_ga.predict(away_totals) * ga_factor
+        #print(home_gf,home_ga,away_gf,away_ga,gf_factor,ga_factor)
+        game_gf = home_gf * away_ga / lg_avg_ga
+        game_ga = home_ga * away_gf / lg_avg_ga
+        game_gf = game_gf.sum()
+        game_ga = game_ga.sum()
+        #apply home advantage
+        game_gf*= home_f
+        game_ga*= away_f
+        #summary stats
+        t1_cs = poisson.pmf(0, game_ga)
+        t2_cs = poisson.pmf(0, game_gf)
+        draw = skellam.pmf(0,game_gf,game_ga)
+        t1_win = 1-skellam.cdf(0,game_gf,game_ga)
+        t2_win = skellam.cdf(-1,game_gf,game_ga)
+        print(home_teams[t],round(t1_win,4),"draw",round(draw,4),away_teams[t],round(t2_win,4))
+        print(home_teams[t],'goals',round(game_gf,2),'CS%',round(100*t1_cs,2))
+        print(away_teams[t],'goals',round(game_ga,2),'CS%',round(100*t2_cs,2))
+        print()
+        player_df.append(df_home)
+        player_df.append(df_away)
+        summary.append([round(game_gf,2),home_teams[t],round(t1_win,4),round(draw,4),round(t2_win,4),away_teams[t],round(game_ga,2)])
+    
+    player_df = pd.concat(player_df)
+    player_df = player_df[['name','team','positionText','MPG']]
+    summary = pd.DataFrame(summary)
+    summary.columns = summary.iloc[0];summary = summary.drop(0)
+    summary = summary.apply(pd.to_numeric, errors='ignore')
+    #player value
+    player_val = player_valuation(project_league,df)
+    return standings,summary,player_val
+
+def player_transfers(player_stats,season):
+    multi_team = player_stats[player_stats['season']==season]
+    multi_team = multi_team[multi_team.duplicated(subset=['playerId'], keep=False)]
+    multi_team = multi_team[['playerId','name','team','minsPlayed']]
+    return multi_team
+
+def player_valuation(target_league,league_player_stats):
+    #standings,gf_factor,ga_factor,pts_factor = league_table(target_league,league_player_stats)
+    #model calibration for league
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+    #team stats
+    training_teams = pd.read_excel(f'{path}/{target_league}_teams.xlsx','Sheet2')
+    training_teams['ShA'] *= training_teams['P']
+    #player valuation
+    gf_players, gf_detail, gf_teams = player_target_credits(league_player_stats, training_teams, model_gf, 'GF')
+    ga_players, ga_detail, ga_teams = player_target_credits(league_player_stats, training_teams, model_ga, 'GA')
+    
+    credits_df = gf_players[['minutes','GF_per_min','GF_standalone_per_min','GF_position_adjusted_per_min','GF_standalone_position_adjusted_per_min']].join(
+                 ga_players[['GA_per_min','GA_standalone_per_min','GA_position_adjusted_per_min','GA_standalone_position_adjusted_per_min']])
+    credits_df['GD_per_min'] = credits_df['GF_per_min'] - credits_df['GA_per_min']
+    credits_df['GD_standalone_per_min'] = credits_df['GF_standalone_per_min'] - credits_df['GA_standalone_per_min']
+    credits_df['GD_position_adjusted_per_min'] = credits_df['GF_position_adjusted_per_min'] - credits_df['GA_position_adjusted_per_min']
+    credits_df['GD_standalone_position_adjusted_per_min'] = credits_df['GF_standalone_position_adjusted_per_min'] - credits_df['GA_standalone_position_adjusted_per_min']
+    credits_df['GF90'] = credits_df['GF_standalone_position_adjusted_per_min']*90
+    credits_df['GA90'] = credits_df['GA_standalone_position_adjusted_per_min']*(-90)
+    credits_df = credits_df.reset_index()
+    credits_df['GD90'] = credits_df['GD_standalone_position_adjusted_per_min'] * 90
+    credits_df['GD90_absolute'] = credits_df['GD_per_min'] * 90
+    credits_df['GD90_avg_absolute'] = credits_df['GD_standalone_per_min'] * 90
+    credits_df = credits_df.merge(league_player_stats[['playerId','name','team','positionText']], on='playerId', how='left')
+    credits_df = credits_df[['playerId','name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90']]
+    return credits_df
 
 #%% calls
-#full_player_stats,team_stats = player_stats_extract('Italy')
+#full_player_stats,team_stats = player_stats_extract(project_league)
 #stabilization_rate(full_player_stats)
 
 player_stats, team_clusters = player_stats_extract_all()
@@ -684,14 +968,20 @@ stat_aging = aging_effects(player_stats)
 
 regressed_stats = regression_player_full(player_stats,league_strength,season)
 
-#%% league forecasts
-if(False): #read_files == 1
-    player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-    player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
-    player_bio = player_bio.drop(columns=['Unnamed: 0'])
+transfer_list = player_transfers(player_stats,season)
 
-regressed_stats_adj,tc = projections_target_league(project_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season)
+#%% custom lineups
+player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
+player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
+player_bio = player_bio.drop(columns=['Unnamed: 0'])
+
+#%% league forecasts
+league_player_stats,tc = projections_target_league(project_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season)
 
 #%% game level results
-standings,_,_,_ = league_table(project_league,regressed_stats_adj)
-#standings = game_engine(project_league,'Inter','AC Milan',regressed_stats_adj)
+
+#standings,_,_,_ = league_table(project_league,league_player_stats)
+
+#player_val = player_valuation(project_league,league_player_stats)
+
+standings,summary,player_val = game_engine(6,project_league,league_player_stats,0) #gameweek, use custom lineups
