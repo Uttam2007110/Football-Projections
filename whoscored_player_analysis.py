@@ -299,7 +299,13 @@ def player_age_correction(player_stats,season,offseason,refresh_teams):
         bio = bio.merge(old_bio[['playerId','team','start','sub']], how='left')
         
     bio = bio[['playerId','name','age','team','start','sub']]
-    return bio
+    transfer_list = player_transfers(_player_stats,season)
+    transfer_list = transfer_list.sort_values(by=['minsPlayed'], ascending=[False])
+    transfer_list = transfer_list.drop_duplicates(subset=['playerId'])
+    bio = bio.merge(transfer_list[['playerId','team']], on='playerId', how='left')
+    bio['team'] = np.where(bio['team_y'].isna(),bio['team_y'],bio['team_x'])
+    bio = bio[['playerId','name','age','team','start','sub']]
+    return bio,transfer_list
 
 def aging_effects(player_stats):
     categories = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%','Save%',
@@ -410,41 +416,72 @@ def player_stats_extract_all():
     return df_players,team_labels
 
 def regression_player_full(full_player_stats,league_strength,season):
-    from sklearn.cluster import KMeans
+    from sklearn.mixture import GaussianMixture
+    from sklearn.decomposition import PCA
     from sklearn.preprocessing import StandardScaler
-    from sklearn.experimental import enable_iterative_imputer
-    from sklearn.impute import IterativeImputer
-    
-    #gk = full_player_stats[full_player_stats['positionText']=='Goalkeeper']
-    #df = full_player_stats[full_player_stats['positionText']=='Defender']
-    #md = full_player_stats[full_player_stats['positionText']=='Midfielder']
-    #fw = full_player_stats[full_player_stats['positionText']=='Forward']
-    #gk_reg = regression_player(gk,league_strength,season)
-    #df_reg = regression_player(df,league_strength,season)
-    #md_reg = regression_player(md,league_strength,season)
-    #fw_reg = regression_player(fw,league_strength,season)    
-    #reg_stats = pd.concat([gk_reg,df_reg,md_reg,fw_reg])
-    
-    categories = ['height','weight','ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head',
+    from sklearn.impute import SimpleImputer
+    """
+    gk = full_player_stats[full_player_stats['positionText']=='Goalkeeper']
+    df = full_player_stats[full_player_stats['positionText']=='Defender']
+    md = full_player_stats[full_player_stats['positionText']=='Midfielder']
+    fw = full_player_stats[full_player_stats['positionText']=='Forward']
+    gk_reg = regression_player(gk,league_strength,season)
+    df_reg = regression_player(df,league_strength,season)
+    md_reg = regression_player(md,league_strength,season)
+    fw_reg = regression_player(fw,league_strength,season)    
+    reg_stats = pd.concat([gk_reg,df_reg,md_reg,fw_reg])
+    """
+    categories = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head',
                   'G%','A%','Save%','dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
                   'tackle_success%','aerial_win%','PssA']
-    kmeans = KMeans(n_clusters=8, init='k-means++', random_state=0)
-    
-    clustering_player_stats = full_player_stats.copy()
-    clustering_player_stats = clustering_player_stats[clustering_player_stats['minsPlayed']>500]
+
+    def best_gmm(data, min_k=3, max_k=12, max_rows=4000, patience=2, random_state=0):
+        """Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening."""
+        rng = np.random.default_rng(random_state)
+        sample = data[rng.choice(len(data), max_rows, replace=False)] if len(data) > max_rows else data
+        best_model, best_bic, worse = None, np.inf, 0
+        for k in range(min_k, min(max_k, len(sample) - 1) + 1):
+            model = GaussianMixture(n_components=k, covariance_type='full', reg_covar=1e-4, random_state=random_state).fit(sample)
+            bic = model.bic(sample)
+            if bic < best_bic:
+                best_model, best_bic, worse = model, bic, 0
+            else:
+                worse += 1
+                if worse >= patience:
+                    break
+        return best_model
+
+    # goalkeepers are kept out of the outfield clustering entirely and always form cluster 0
+    gk_mask = (full_player_stats['positionText']=='Goalkeeper').to_numpy()
+    train_mask = (~gk_mask) & (full_player_stats['minsPlayed']>500).to_numpy()
+    outfield_categories = [c for c in categories if c!='Save%']
+
+    imputer = SimpleImputer(strategy='median')
     scaler = StandardScaler()
-    imputer = IterativeImputer()
-    kmeans.fit(imputer.fit_transform(scaler.fit_transform(clustering_player_stats[categories])))
-    full_player_stats['cluster'] = kmeans.predict(imputer.fit_transform(scaler.fit_transform(full_player_stats[categories])))
-    player_labels = full_player_stats.groupby('playerId')['cluster'].apply(lambda x: x.value_counts().idxmax()).reset_index()
+    pca = PCA(n_components=10, random_state=0)
+    train_x = pca.fit_transform(scaler.fit_transform(imputer.fit_transform(full_player_stats.loc[train_mask, outfield_categories])))
+    gmm = best_gmm(train_x)
+    print(f"regression_player_full: selected {gmm.n_components} outfield clusters via BIC")
+
+    outfield_x = pca.transform(scaler.transform(imputer.transform(full_player_stats.loc[~gk_mask, outfield_categories])))
+    full_player_stats['cluster'] = 0
+    full_player_stats.loc[~gk_mask,'cluster'] = gmm.predict(outfield_x) + 1
+
+    # each player gets the cluster where they logged the most minutes across seasons
+    player_minutes = full_player_stats[~gk_mask].assign(minsPlayed=lambda x: x['minsPlayed'].fillna(0)).groupby(['playerId','cluster'], sort=False)['minsPlayed'].sum().reset_index()
+    player_labels = player_minutes.loc[player_minutes.groupby('playerId')['minsPlayed'].idxmax(), ['playerId','cluster']]
     full_player_stats = full_player_stats.merge(player_labels, on='playerId', how='left')
+    full_player_stats['cluster_y'] = np.where(gk_mask, 0, full_player_stats['cluster_y'])
     
     reg_stats = [];
     for c in full_player_stats['cluster_y'].drop_duplicates():
         cn = full_player_stats[full_player_stats['cluster_y']==c]
-        reg_stats.append(regression_player(cn,league_strength,season))
+        cluster = regression_player(cn,league_strength,season)
+        cluster['cluster'] = c
+        reg_stats.append(cluster)
     
     reg_stats = pd.concat(reg_stats)
+    
     return reg_stats
 
 def relevant_team_label(target_league,team_clusters,season):
@@ -576,7 +613,11 @@ def team_stats_regresion(league,target):
     return reg_model,target_mean
 
 def player_target_credits(players, training_teams, model, target):
-    """Allocate absolute credits and minutes-weighted, position-centred ratings."""
+    """Evaluate players and replacements pinned to 90 minutes.
+
+    Absolute credits retain original minutes and reconstruct team predictions;
+    position-centred ratings use impacts per actual post-rescaling minute.
+    """
     VARIABLES = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
                  'KP','TO%','Drb','dribble_win%', 'FlsW', 'FlsC', 'Tkl','tackle_success%', 'Int','Blk','Clr', 'Off',
                  'Head', 'aerial_win%', 'YC', 'RC', 'ShA','Save%']
@@ -590,13 +631,33 @@ def player_target_credits(players, training_teams, model, target):
     if(not np.isfinite(reference_stats.to_numpy(dtype=float)).all()):
         raise ValueError("Training reference contains NaN or infinity")
 
-    def team_features(frame):
+    def team_features(frame, evaluated_mask=None):
         # Minutes were adjusted once below; do not multiply by appearance probability again.
-        _, totals = mins_adjustment(frame.assign(play=1).copy(), 0)
+        lineup = frame.assign(play=1).copy()
+        if(evaluated_mask is not None):
+            weights = lineup.loc[evaluated_mask, 'MPG']
+            lineup.loc[evaluated_mask, 'MPG'] = 90 * weights/weights.sum()
+            for keeper_group, total in [(True, 90), (False, 900)]:
+                group = lineup['positionText'].eq('Goalkeeper').to_numpy() == keeper_group
+                remaining = group & ~evaluated_mask
+                budget = total - lineup.loc[group & evaluated_mask, 'MPG'].sum()
+                remaining_minutes = lineup.loc[remaining, 'MPG'].sum()
+                if(budget < -1e-10 or (budget > 1e-10 and remaining_minutes <= 0)):
+                    raise ValueError(f"{team}: insufficient teammates to pin evaluated player to 90 minutes")
+                if(remaining_minutes > 0):
+                    lineup.loc[remaining, 'MPG'] *= max(budget, 0)/remaining_minutes
+        adjusted, totals = mins_adjustment(lineup, 0)
         features = totals.loc[VARIABLES].to_frame().T.astype(float)
         if(not np.isfinite(features.to_numpy()).all()):
             invalid = features.columns[~np.isfinite(features.to_numpy()).all(axis=0)].tolist()
             raise ValueError(f"{team}: invalid aggregated inputs: {invalid}")
+        if(evaluated_mask is not None):
+            evaluation_minutes = adjusted.loc[lineup.index[evaluated_mask], 'MPG'].sum()
+            if(not np.isfinite(evaluation_minutes) or evaluation_minutes <= 0):
+                raise ValueError(f"{team}: invalid evaluated player minutes")
+            if(not np.isclose(evaluation_minutes, 90, rtol=1e-9, atol=1e-10)):
+                raise ValueError(f"{team}: evaluated player minutes were not pinned to 90")
+            return features, evaluation_minutes
         return features
 
     records, team_records = [], []
@@ -658,29 +719,38 @@ def player_target_credits(players, training_teams, model, target):
 
         # Build all hypothetical team inputs, then predict them together.
         feature_rows = [reference_inputs, team_features(actual)]
+        evaluation_minutes = []
         
         for mask in masks:
             reference_with_player = reference.copy()
             reference_with_player.loc[mask, :] = actual.loc[mask, :]
             actual_without_player = actual.copy()
             actual_without_player.loc[mask, :] = reference.loc[mask, :]
-            feature_rows.extend([team_features(reference_with_player), team_features(actual_without_player)])
+            context_minutes = []
+            for lineup in [reference_with_player, reference, actual, actual_without_player]:
+                features, evaluated_minutes = team_features(lineup, mask)
+                feature_rows.append(features)
+                context_minutes.append(evaluated_minutes)
+            evaluation_minutes.append(context_minutes)
         
         X_batch = pd.concat(feature_rows, ignore_index=True)
         predictions = np.asarray(model.predict(X_batch), dtype=float)
-        if(predictions.ndim != 1 or len(predictions) != 2 + 2*len(player_ids)):
+        if(predictions.ndim != 1 or len(predictions) != 2 + 4*len(player_ids)):
             raise ValueError(f"{team}: expected one prediction per hypothetical team, got {predictions.shape}")
         if(not np.isfinite(predictions).all()):
             raise ValueError(f"{team}: model predictions contain NaN or infinity")
         
         reference_value, team_prediction = predictions[:2]
-        player_predictions = predictions[2:].reshape(len(player_ids), 2)
+        player_predictions = predictions[2:].reshape(len(player_ids), 4)
+        evaluation_minutes = np.asarray(evaluation_minutes)
         
-        # Player added to the reference team.
-        standalone = player_predictions[:, 0] - reference_value
+        # Express 90-minute evaluation impacts at each player's original minutes.
+        standalone = (player_predictions[:, 0] - player_predictions[:, 1]) * (
+            player_minutes/evaluation_minutes[:, 0])
         
         # Player's effect in their actual team.
-        actual_context = team_prediction - player_predictions[:, 1]
+        actual_context = (player_predictions[:, 2] - player_predictions[:, 3]) * (
+            player_minutes/evaluation_minutes[:, 2])
         
         # Approximate Shapley using the two endpoint contexts.
         approximate_marginal = 0.5 * (standalone + actual_context)
@@ -770,10 +840,16 @@ def mins_adjustment(df,game_level):
         team_df = team_df.sort_values(by=['MPG'], ascending=[False])
     else:
         keepers = df[df['positionText']=='Goalkeeper']
-        others = df[df['positionText']!='Goalkeeper']
-        keepers['MPG'] *= keepers['play']
+        keepers['play_rank'] = keepers['play'].rank(ascending=False, method='dense')
+        keepers['MPG'] *= keepers['play'] * pow(1/4,keepers['play_rank']-1) #keeper mins need to be decayed more aggressively
         keepers['MPG'] *= 90/keepers['MPG'].sum()
-        others['MPG'] *= others['play']
+        others = df[df['positionText']!='Goalkeeper']
+        others['play_rank'] = others['play'].rank(ascending=False, method='dense')
+        others['MPG'] *= others['play'] #* pow(.95,others['play_rank']-1) #outfielders mins need to be decayed less aggressively
+        while(others['MPG'].sum()<=899 or others['MPG'].sum()>=901):
+            others['MPG'] *= 900/others['MPG'].sum()
+            others['MPG'] = others['MPG'].clip(upper=89)
+        #final adjustment to make it 900
         others['MPG'] *= 900/others['MPG'].sum()
         team_df = pd.concat([keepers,others])
         team_df = team_df.sort_values(by=['MPG'], ascending=[False])
@@ -848,6 +924,7 @@ def league_table(target_league,df):
     totals_df['teams'] = team_list
     totals_df = totals_df[['teams','GF','GA','GD','Pts']]
     totals_df = totals_df.sort_values(by=['Pts'], ascending=[False])
+    totals_df = totals_df.round({'GF':2, 'GA':2, 'GD':2, 'Pts':2})
     return totals_df,gf_factor,ga_factor,pts_factor
 
 def game_engine(gw,target_league,df,custom_lineups):
@@ -952,36 +1029,35 @@ def player_valuation(target_league,league_player_stats):
     credits_df['GD90_avg_absolute'] = credits_df['GD_standalone_per_min'] * 90
     credits_df = credits_df.merge(league_player_stats[['playerId','name','team','positionText']], on='playerId', how='left')
     credits_df = credits_df[['playerId','name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90']]
+    credits_df = credits_df.round({'GF90': 3, 'GA90': 3, 'GD90':3, 'minutes':1})
     return credits_df
 
 #%% calls
 #full_player_stats,team_stats = player_stats_extract(project_league)
 #stabilization_rate(full_player_stats)
 
-player_stats, team_clusters = player_stats_extract_all()
+_player_stats, _team_clusters = player_stats_extract_all()
 
-player_bio = player_age_correction(player_stats,season,0,1) #offseason rosters, pick latest team
+_player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
 
-league_strength = league_conversions(player_stats,season)
+_league_strength = league_conversions(_player_stats,season)
 
-stat_aging = aging_effects(player_stats)
+_stat_aging = aging_effects(_player_stats)
 
-regressed_stats = regression_player_full(player_stats,league_strength,season)
-
-transfer_list = player_transfers(player_stats,season)
+_regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
 #%% custom lineups
-player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
-player_bio = player_bio.drop(columns=['Unnamed: 0'])
+_player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
+_player_bio[['start','sub']] = _player_bio[['start','sub']].fillna(0)
+_player_bio = _player_bio.drop(columns=['Unnamed: 0'])
 
 #%% league forecasts
-league_player_stats,tc = projections_target_league(project_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season)
+league_player_stats,tc = projections_target_league(project_league,_regressed_stats,_player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% game level results
 
 #standings,_,_,_ = league_table(project_league,league_player_stats)
 
-#player_val = player_valuation(project_league,league_player_stats)
+#player_value = player_valuation(project_league,league_player_stats)
 
-standings,summary,player_val = game_engine(6,project_league,league_player_stats,0) #gameweek, use custom lineups
+standings,summary,player_value = game_engine(7,project_league,league_player_stats,0) #gameweek, use custom lineups
