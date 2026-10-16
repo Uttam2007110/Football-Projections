@@ -13,6 +13,7 @@ pd.options.mode.chained_assignment = None
 
 import argparse
 import ast
+import html as html_lib
 import json
 import re
 import ssl
@@ -418,6 +419,39 @@ class WhoScored:
         r.raise_for_status()
         return r.text
 
+    # -- sibling group stages ------------------------------------------------
+    def group_stages(self) -> list[tuple[int, str]]:
+        """Every group stage that belongs with the requested stage.
+
+        Older Champions/Europa League seasons split the league phase into one
+        WhoScored stage per group ("Champions League Grp. A" .. "Grp. H",
+        "Europa League Grp. A" .. "Grp. L"), each with its own stage id, so a
+        single stage only covers one group. Group stage ids are not
+        consecutive, so they are read from the page's stage selector. For a
+        stage that is not a group, only the requested stage is returned.
+        """
+        m = re.search(r'<select[^>]*id="stages"[^>]*>(.*?)</select>', self._html, re.S)
+        if not m:
+            return [(self.stage_id, "")]
+        options = [
+            (int(stage_id), html_lib.unescape(name).strip())
+            for stage_id, name in re.findall(
+                r'value="[^"]*?Stages(?:&#47;|/)(\d+)[^"]*"[^>]*>([^<]+)<', m.group(1), re.I
+            )
+        ]
+        group_pattern = re.compile(r"(.*?)\s*Grp\.\s*\w+$", re.I)
+        names = dict(options)
+        current = group_pattern.match(names.get(self.stage_id, ""))
+        if not current:
+            return [(self.stage_id, names.get(self.stage_id, ""))]
+        prefix = current.group(1).lower()
+        groups = [
+            (stage_id, name)
+            for stage_id, name in options
+            if (g := group_pattern.match(name)) and g.group(1).lower() == prefix
+        ]
+        return groups or [(self.stage_id, names[self.stage_id])]
+
     # -- standings (stage / season page) ------------------------------------
     def standings(self, url: str | None = None) -> list[dict]:
         """League standings for the Overall sub-selection only.
@@ -748,6 +782,30 @@ class WhoScored:
             return tables
         return {name: _to_frame(rows) for name, rows in tables.items()}
 
+    def all_group_tables(self, method: str = "all_tables", quiet: bool = False):
+        """Run `method` ("all_tables" / "all_player_tables") on every group stage
+        and stack each table across groups, so a pre-2024 European league phase
+        returns all groups rather than just the requested one.
+        """
+        groups = self.group_stages()
+        if len(groups) <= 1:
+            return getattr(self, method)(quiet=quiet)
+
+        cfg = self.cfg
+        combined: dict[str, list] = defaultdict(list)
+        for stage_id, name in groups:
+            if not quiet:
+                print(f"Fetching {name} (stage {stage_id})")
+            scraper = self if stage_id == self.stage_id else WhoScored(
+                delay=self.delay,
+                verify=self.verify,
+                config=get_config(cfg.REGION_ID, cfg.TOURNAMENT_ID, cfg.SEASON_ID, stage_id, cfg.SLUG),
+            )
+            for table_name, frame in getattr(scraper, method)(quiet=quiet).items():
+                if not frame.empty:
+                    combined[table_name].append(frame)
+        return {name: pd.concat(frames) for name, frames in combined.items()}
+
     def all_player_tables(self, as_frame: bool = True, quiet: bool = False):
         """Fetch every Detailed-tab table from the player-statistics page.
 
@@ -837,9 +895,10 @@ def fetch_tables(
 
     >>> tables = fetch_tables("https://www.whoscored.com/regions/108/...")
     """
-    return WhoScored(url, delay=delay, verify=verify, config=config).all_tables(
-        as_frame=as_frame, quiet=quiet
-    )
+    scraper = WhoScored(url, delay=delay, verify=verify, config=config)
+    if not as_frame:
+        return scraper.all_tables(as_frame=False, quiet=quiet)
+    return scraper.all_group_tables("all_tables", quiet=quiet)
 
 def fetch_player_tables(
     url: str | None = None,
@@ -861,9 +920,10 @@ def fetch_player_tables(
     >>> player_tables = fetch_player_tables(config=cfg)
     >>> player_tables["detailed_shots_zones"].sort_values("shotsTotal", ascending=False)
     """
-    return WhoScored(url, delay=delay, verify=verify, config=config).all_player_tables(
-        as_frame=as_frame, quiet=quiet
-    )
+    scraper = WhoScored(url, delay=delay, verify=verify, config=config)
+    if not as_frame:
+        return scraper.all_player_tables(as_frame=False, quiet=quiet)
+    return scraper.all_group_tables("all_player_tables", quiet=quiet)
 
 def teams_data(region_id,tournament_id,season_id,stage_id,slug, argv: list[str] | None = None):
     """Entry point. The competition/season coordinates live here and are passed
@@ -920,7 +980,7 @@ def teams_data(region_id,tournament_id,season_id,stage_id,slug, argv: list[str] 
         cfg = get_config(**parse_url(args.url))  # keep config consistent with url
 
     print(f"Fetching {url}")
-    tables = WhoScored(url, delay=args.delay, verify=verify, config=cfg).all_tables()
+    tables = WhoScored(url, delay=args.delay, verify=verify, config=cfg).all_group_tables("all_tables")
 
     if pd is not None:
         pd.set_option("display.width", 200)
@@ -1010,7 +1070,7 @@ def players_data(region_id,tournament_id,season_id,stage_id,slug, argv: list[str
         cfg = get_config(**parse_url(args.url))  # keep config consistent with url
 
     print(f"Fetching {url}")
-    tables = WhoScored(url, delay=args.delay, verify=verify, config=cfg).all_player_tables()
+    tables = WhoScored(url, delay=args.delay, verify=verify, config=cfg).all_group_tables("all_player_tables")
 
     if pd is not None:
         pd.set_option("display.width", 200)
@@ -1717,7 +1777,8 @@ def team_stats_regresion(analysis,target,split_season):
 
 #%% extract data
 path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
-league = 'Netherlands'
+#path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
+league = 'England2'
 season_start = 2027
 season_end = 2027
 update_file = 0
@@ -1730,7 +1791,7 @@ update_file = 0
 #full_stats,regression_stats = team_stats_summarize(all_tables,2022)
 
 full_stats,regression_stats = multi_season_team_extract(league,season_start,season_end)
-#full_player_stats = multi_season_player_extract(league,season_start,season_end)
+full_player_stats = multi_season_player_extract(league,season_start,season_end)
 
 #%% regerssion model
 """
@@ -1740,7 +1801,7 @@ regression_stats = team_stats_regresion(regression_stats,'GA',2022)
 regression_stats['Pred_GD'] = regression_stats['Pred_GF'] - regression_stats['Pred_GA']
 """
 #%% edit existing files
-"""
+
 if(update_file == 1):
     old_team_stats = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet1')
     old_reg_stats = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet2')
@@ -1763,4 +1824,3 @@ if(update_file == 1):
         old_team_stats.to_excel(writer, index=False, sheet_name='Sheet1')
         old_reg_stats.to_excel(writer, index=False, sheet_name='Sheet2')
     old_player_stats.to_excel(f'{path}/{league}_players.xlsx', index=False, sheet_name='Sheet1')
-"""
