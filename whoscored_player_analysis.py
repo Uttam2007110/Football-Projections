@@ -21,7 +21,6 @@ path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
 #path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
 
 season = 2027
-project_league = 'England'
 
 #%% functions
 def player_stats_extract(league):
@@ -280,6 +279,12 @@ def team_subclusters(team_stats_list):
     team_stats = team_stats[['team','season','label','P']]
     return team_stats
 
+def player_transfers(player_stats,season):
+    multi_team = player_stats[player_stats['season']==season]
+    multi_team = multi_team[multi_team.duplicated(subset=['playerId'], keep=False)]
+    multi_team = multi_team[['playerId','name','team','minsPlayed']]
+    return multi_team
+
 def player_age_correction(player_stats,season,offseason,refresh_teams):
     player_stats = player_stats.sort_values(by=['playerId', 'season'], ascending=[True, False])
     bio = player_stats[['playerId','name','season','team','age']].drop_duplicates(subset=['playerId'], keep='first')
@@ -299,13 +304,18 @@ def player_age_correction(player_stats,season,offseason,refresh_teams):
         bio = bio.merge(old_bio[['playerId','team','start','sub']], how='left')
         
     bio = bio[['playerId','name','age','team','start','sub']]
-    transfer_list = player_transfers(_player_stats,season)
-    transfer_list = transfer_list.sort_values(by=['minsPlayed'], ascending=[False])
-    transfer_list = transfer_list.drop_duplicates(subset=['playerId'])
+    full_transfer_list = player_transfers(_player_stats,season)
+    full_transfer_list = full_transfer_list.sort_values(by=['minsPlayed'], ascending=[False])
+    transfer_list = full_transfer_list.drop_duplicates(subset=['playerId'])
     bio = bio.merge(transfer_list[['playerId','team']], on='playerId', how='left')
-    bio['team'] = np.where(bio['team_y'].isna(),bio['team_y'],bio['team_x'])
+    bio['team'] = np.where(~bio['team_y'].isna(),bio['team_y'],bio['team_x'])
     bio = bio[['playerId','name','age','team','start','sub']]
-    return bio,transfer_list
+    
+    full_transfer_list = full_transfer_list.groupby(["playerId", "name"], sort=False)["team"].agg(lambda s: s.dropna().drop_duplicates().tolist())
+    full_transfer_list = pd.DataFrame(full_transfer_list.tolist(), index=full_transfer_list.index)
+    full_transfer_list.columns = [f"team{i + 1}" for i in range(full_transfer_list.shape[1])]
+    full_transfer_list = full_transfer_list.reset_index()
+    return bio,full_transfer_list
 
 def aging_effects(player_stats):
     categories = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%','Save%',
@@ -435,7 +445,8 @@ def regression_player_full(full_player_stats,league_strength,season):
                   'G%','A%','Save%','dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
                   'tackle_success%','aerial_win%','PssA']
 
-    def best_gmm(data, min_k=3, max_k=12, max_rows=4000, patience=2, random_state=0):
+    #usually 8, sometimes 7
+    def best_gmm(data, min_k=4, max_k=11, max_rows=4000, patience=2, random_state=0):
         """Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening."""
         rng = np.random.default_rng(random_state)
         sample = data[rng.choice(len(data), max_rows, replace=False)] if len(data) > max_rows else data
@@ -443,12 +454,11 @@ def regression_player_full(full_player_stats,league_strength,season):
         for k in range(min_k, min(max_k, len(sample) - 1) + 1):
             model = GaussianMixture(n_components=k, covariance_type='full', reg_covar=1e-4, random_state=random_state).fit(sample)
             bic = model.bic(sample)
-            if bic < best_bic:
+            if(bic < best_bic): 
                 best_model, best_bic, worse = model, bic, 0
             else:
                 worse += 1
-                if worse >= patience:
-                    break
+                if(worse >= patience): break
         return best_model
 
     # goalkeepers are kept out of the outfield clustering entirely and always form cluster 0
@@ -587,6 +597,8 @@ def team_stats_regresion(league,target):
 
     analysis = pd.read_excel(f'{path}/{league}_teams.xlsx','Sheet2')
     analysis['ShA'] *= analysis['P']
+    #points deductions not in the scope of model training
+    analysis['Pts'] = 3*analysis['W'] + analysis['D']
     #X = analysis[variables]
     #y = analysis[target]
     #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
@@ -845,7 +857,7 @@ def mins_adjustment(df,game_level):
         keepers['MPG'] *= 90/keepers['MPG'].sum()
         others = df[df['positionText']!='Goalkeeper']
         others['play_rank'] = others['play'].rank(ascending=False, method='dense')
-        others['MPG'] *= others['play'] #* pow(.95,others['play_rank']-1) #outfielders mins need to be decayed less aggressively
+        others['MPG'] *= others['play'] * pow(.99,others['play_rank']-1) #outfielders mins need to be decayed less aggressively
         while(others['MPG'].sum()<=899 or others['MPG'].sum()>=901):
             others['MPG'] *= 900/others['MPG'].sum()
             others['MPG'] = others['MPG'].clip(upper=89)
@@ -927,6 +939,143 @@ def league_table(target_league,df):
     totals_df = totals_df.round({'GF':2, 'GA':2, 'GD':2, 'Pts':2})
     return totals_df,gf_factor,ga_factor,pts_factor
 
+def player_valuation(target_league,league_player_stats):
+    #standings,gf_factor,ga_factor,pts_factor = league_table(target_league,league_player_stats)
+    #model calibration for league
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+    #team stats
+    training_teams = pd.read_excel(f'{path}/{target_league}_teams.xlsx','Sheet2')
+    training_teams['ShA'] *= training_teams['P']
+    #player valuation
+    gf_players, gf_detail, gf_teams = player_target_credits(league_player_stats, training_teams, model_gf, 'GF')
+    ga_players, ga_detail, ga_teams = player_target_credits(league_player_stats, training_teams, model_ga, 'GA')
+    
+    credits_df = gf_players[['minutes','GF_per_min','GF_standalone_per_min','GF_position_adjusted_per_min','GF_standalone_position_adjusted_per_min']].join(
+                 ga_players[['GA_per_min','GA_standalone_per_min','GA_position_adjusted_per_min','GA_standalone_position_adjusted_per_min']])
+    credits_df['GD_per_min'] = credits_df['GF_per_min'] - credits_df['GA_per_min']
+    credits_df['GD_standalone_per_min'] = credits_df['GF_standalone_per_min'] - credits_df['GA_standalone_per_min']
+    credits_df['GD_position_adjusted_per_min'] = credits_df['GF_position_adjusted_per_min'] - credits_df['GA_position_adjusted_per_min']
+    credits_df['GD_standalone_position_adjusted_per_min'] = credits_df['GF_standalone_position_adjusted_per_min'] - credits_df['GA_standalone_position_adjusted_per_min']
+    credits_df['GF90'] = credits_df['GF_standalone_position_adjusted_per_min']*90
+    credits_df['GA90'] = credits_df['GA_standalone_position_adjusted_per_min']*(-90)
+    credits_df = credits_df.reset_index()
+    credits_df['GD90'] = credits_df['GD_standalone_position_adjusted_per_min'] * 90
+    credits_df['GD90_absolute'] = credits_df['GD_per_min'] * 90
+    credits_df['GD90_avg_absolute'] = credits_df['GD_standalone_per_min'] * 90
+    credits_df = credits_df.merge(league_player_stats[['playerId','name','team','positionText']], on='playerId', how='left')
+    credits_df = credits_df[['playerId','name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90']]
+    credits_df = credits_df.round({'GF90': 3, 'GA90': 3, 'GD90':3, 'minutes':1})
+    return credits_df
+
+def average_team_profiles(league_player_stats):
+    counts = ['Pss','PssA','Sh','ShA','Drb','FlsW','Fls','Clr','TO%','KP','Tkl','Int','Blk','Off','YC','RC','Head','Save%']
+    rate_bases = {'aerial_win%': 'Head', 'dribble_win%': 'Drb', 'shots_target%': 'Sh',
+                  'shots_blocked%': 'Sh', 'tackle_success%': 'Tkl'}
+    missing = [c for c in counts + list(rate_bases) + ['long_success%','short_success%','long_bias','MPG','play','positionText']
+               if c not in league_player_stats.columns]
+    if(missing):
+        raise ValueError(f"league_player_stats is missing columns: {missing}")
+
+    df = league_player_stats.copy()
+    df['_w'] = (df['MPG']*df['play']).clip(lower=0).fillna(0)
+    df['_long_att%'] = df['long_bias']/(df['long_bias']+1)
+
+    def weighted(values, weights):
+        valid = values.notna() & weights.notna() & (weights > 0)
+        return (values[valid]*weights[valid]).sum()/weights[valid].sum() if valid.any() else np.nan
+
+    profiles = {}
+    for position, group in df.groupby('positionText', sort=False):
+        w = group['_w'] if group['_w'].sum() > 0 else pd.Series(1.0, index=group.index)
+        profile = {c: weighted(group[c], w) for c in counts}
+        for rate, base in rate_bases.items():
+            profile[rate] = weighted(group[rate], w*group[base])
+        long_att = weighted(group['_long_att%'], w*group['Pss'])
+        profile['long_bias'] = long_att/(1-long_att)
+        profile['long_success%'] = weighted(group['long_success%'], w*group['Pss']*group['_long_att%'])
+        profile['short_success%'] = weighted(group['short_success%'], w*group['Pss']*(1-group['_long_att%']))
+        profiles[position] = profile
+    profiles = pd.DataFrame(profiles).T
+    profiles.index.name = 'positionText'
+    profiles['Save%'] = np.where(profiles.index == 'Goalkeeper', profiles['Save%'], 0)
+    return profiles
+
+def player_valuation_average_team(target_league, league_player_stats, formation=None):
+    if(formation is None):
+        formation = {'Goalkeeper': 1, 'Defender': 4, 'Midfielder': 3, 'Forward': 3}
+    if(formation.get('Goalkeeper', 0) != 1 or sum(formation.values()) != 11):
+        raise ValueError("formation must contain exactly 1 Goalkeeper and 11 players in total")
+
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+
+    profiles = average_team_profiles(league_player_stats)
+    absent = [p for p in formation if p not in profiles.index]
+    if(absent):
+        raise ValueError(f"No players available to build the average {absent}")
+    stat_columns = profiles.columns.tolist()
+
+    base_team = pd.concat([profiles.loc[[p]*n] for p, n in formation.items() if n > 0]).reset_index()
+    base_team['MPG'] = 90.0
+    base_team['play'] = 1.0
+
+    players = league_player_stats[['playerId','name','team','positionText','MPG','play'] + stat_columns].copy()
+    unknown = players.loc[~players['positionText'].isin([p for p, n in formation.items() if n > 0]), 'positionText'].unique()
+    if(len(unknown)):
+        raise ValueError(f"positionText values not present in the formation: {list(unknown)}")
+    players['Save%'] = np.where(players['positionText'] == 'Goalkeeper', players['Save%'], 0)
+
+    def lineup_features(lineup):
+        # every player in the lineup, evaluated or average, is pinned to 90 minutes
+        lineup = lineup.copy()
+        lineup['MPG'] = 90.0
+        lineup['play'] = 1.0
+        adjusted, totals = mins_adjustment(lineup, 0)
+        if(not np.allclose(adjusted['MPG'], 90.0)):
+            raise ValueError("Average-team lineup minutes were not kept at 90 per player")
+        return totals.to_frame().T
+
+    feature_rows = [lineup_features(base_team)]
+    for _, player in players.iterrows():
+        lineup = base_team.copy()
+        slot = lineup.index[lineup['positionText'] == player['positionText']][0]
+        lineup.loc[slot, stat_columns] = player[stat_columns].to_numpy(dtype=float)
+        feature_rows.append(lineup_features(lineup))
+    features = pd.concat(feature_rows, ignore_index=True).astype(float)
+    if(not np.isfinite(features.to_numpy()).all()):
+        bad = features.columns[~np.isfinite(features.to_numpy()).all(axis=0)].tolist()
+        raise ValueError(f"Non-finite aggregated team inputs: {bad}")
+
+    gf = np.asarray(model_gf.predict(features), dtype=float)
+    ga = np.asarray(model_ga.predict(features), dtype=float)
+    # scale so that the average team scores and concedes the league average
+    gf *= lg_avg_gf/gf[0]
+    ga *= lg_avg_ga/ga[0]
+
+    players['GF90'] = gf[1:] - gf[0]
+    players['GA90'] = -(ga[1:] - ga[0])
+    players['GD90'] = players['GF90'] + players['GA90']
+    players['team_GF'] = gf[1:]
+    players['team_GA'] = ga[1:]
+
+    # players listed under several rows (e.g. positions) are combined by expected minutes
+    players['_w'] = (players['MPG']*players['play']).clip(lower=0).fillna(0)
+    players['_w'] = np.where(players.groupby('playerId')['_w'].transform('sum') > 0, players['_w'], 1)
+    for c in ['GF90','GA90','GD90','team_GF','team_GA']:
+        players[c] *= players['_w']
+    value = players.groupby('playerId', sort=False).agg(
+        name=('name','first'), team=('team','first'), positionText=('positionText','first'),
+        minutes=('_w','sum'), GF90=('GF90','sum'), GA90=('GA90','sum'), GD90=('GD90','sum'),
+        team_GF=('team_GF','sum'), team_GA=('team_GA','sum')).reset_index()
+    for c in ['GF90','GA90','GD90','team_GF','team_GA']:
+        value[c] /= value['minutes']
+    value['minutes'] = players.groupby('playerId', sort=False).apply(lambda x: (x['MPG']*x['play']).sum()).to_numpy()
+    value = value.sort_values('GD90', ascending=False)
+    value = value.round({'GF90': 3, 'GA90': 3, 'GD90': 3, 'team_GF': 3, 'team_GA': 3, 'minutes': 1})
+    print(f"average team: GF {lg_avg_gf:.3f}, GA {lg_avg_ga:.3f} per game")
+    return value
+
 def game_engine(gw,target_league,df,custom_lineups):
     player_df = []
     summary = [['Home Goals','Home','Home win%','Draw%','Away win%','Away','Away Goals']]
@@ -977,10 +1126,10 @@ def game_engine(gw,target_league,df,custom_lineups):
         #summary stats
         t1_cs = poisson.pmf(0, game_ga)
         t2_cs = poisson.pmf(0, game_gf)
-        draw = skellam.pmf(0,game_gf,game_ga)
-        t1_win = 1-skellam.cdf(0,game_gf,game_ga)
-        t2_win = skellam.cdf(-1,game_gf,game_ga)
-        print(home_teams[t],round(t1_win,4),"draw",round(draw,4),away_teams[t],round(t2_win,4))
+        draw = skellam.pmf(0,game_gf,game_ga) * 100
+        t1_win = (1-skellam.cdf(0,game_gf,game_ga)) * 100
+        t2_win = (skellam.cdf(-1,game_gf,game_ga)) * 100
+        print(home_teams[t],round(t1_win,2),"draw",round(draw,2),away_teams[t],round(t2_win,2))
         print(home_teams[t],'goals',round(game_gf,2),'CS%',round(100*t1_cs,2))
         print(away_teams[t],'goals',round(game_ga,2),'CS%',round(100*t2_cs,2))
         print()
@@ -993,52 +1142,22 @@ def game_engine(gw,target_league,df,custom_lineups):
     summary = pd.DataFrame(summary)
     summary.columns = summary.iloc[0];summary = summary.drop(0)
     summary = summary.apply(pd.to_numeric, errors='ignore')
+    summary = summary.round({'Home win%':1, 'Draw%':1, 'Away win%':1})
     #player value
     player_val = player_valuation(project_league,df)
+    player_val_avg_team = player_valuation_average_team(project_league,df)
+    player_val_avg_team = player_val_avg_team[['playerId','GF90','GA90','GD90']].rename(columns={'GF90':'GF90_avg_team','GA90':'GA90_avg_team','GD90':'GD90_avg_team'})
+    player_val = player_val.merge(player_val_avg_team, on='playerId', how='outer')
+    player_val = player_val[['playerId', 'name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90', 'GD90_avg_team']]
     return standings,summary,player_val
 
-def player_transfers(player_stats,season):
-    multi_team = player_stats[player_stats['season']==season]
-    multi_team = multi_team[multi_team.duplicated(subset=['playerId'], keep=False)]
-    multi_team = multi_team[['playerId','name','team','minsPlayed']]
-    return multi_team
-
-def player_valuation(target_league,league_player_stats):
-    #standings,gf_factor,ga_factor,pts_factor = league_table(target_league,league_player_stats)
-    #model calibration for league
-    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
-    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
-    #team stats
-    training_teams = pd.read_excel(f'{path}/{target_league}_teams.xlsx','Sheet2')
-    training_teams['ShA'] *= training_teams['P']
-    #player valuation
-    gf_players, gf_detail, gf_teams = player_target_credits(league_player_stats, training_teams, model_gf, 'GF')
-    ga_players, ga_detail, ga_teams = player_target_credits(league_player_stats, training_teams, model_ga, 'GA')
-    
-    credits_df = gf_players[['minutes','GF_per_min','GF_standalone_per_min','GF_position_adjusted_per_min','GF_standalone_position_adjusted_per_min']].join(
-                 ga_players[['GA_per_min','GA_standalone_per_min','GA_position_adjusted_per_min','GA_standalone_position_adjusted_per_min']])
-    credits_df['GD_per_min'] = credits_df['GF_per_min'] - credits_df['GA_per_min']
-    credits_df['GD_standalone_per_min'] = credits_df['GF_standalone_per_min'] - credits_df['GA_standalone_per_min']
-    credits_df['GD_position_adjusted_per_min'] = credits_df['GF_position_adjusted_per_min'] - credits_df['GA_position_adjusted_per_min']
-    credits_df['GD_standalone_position_adjusted_per_min'] = credits_df['GF_standalone_position_adjusted_per_min'] - credits_df['GA_standalone_position_adjusted_per_min']
-    credits_df['GF90'] = credits_df['GF_standalone_position_adjusted_per_min']*90
-    credits_df['GA90'] = credits_df['GA_standalone_position_adjusted_per_min']*(-90)
-    credits_df = credits_df.reset_index()
-    credits_df['GD90'] = credits_df['GD_standalone_position_adjusted_per_min'] * 90
-    credits_df['GD90_absolute'] = credits_df['GD_per_min'] * 90
-    credits_df['GD90_avg_absolute'] = credits_df['GD_standalone_per_min'] * 90
-    credits_df = credits_df.merge(league_player_stats[['playerId','name','team','positionText']], on='playerId', how='left')
-    credits_df = credits_df[['playerId','name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90']]
-    credits_df = credits_df.round({'GF90': 3, 'GA90': 3, 'GD90':3, 'minutes':1})
-    return credits_df
-
 #%% calls
-#full_player_stats,team_stats = player_stats_extract(project_league)
+#full_player_stats,team_stats = player_stats_extract('Italy')
 #stabilization_rate(full_player_stats)
 
 _player_stats, _team_clusters = player_stats_extract_all()
 
-_player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
+player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
 
 _league_strength = league_conversions(_player_stats,season)
 
@@ -1047,17 +1166,19 @@ _stat_aging = aging_effects(_player_stats)
 _regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
 #%% custom lineups
-_player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-_player_bio[['start','sub']] = _player_bio[['start','sub']].fillna(0)
-_player_bio = _player_bio.drop(columns=['Unnamed: 0'])
+player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
+player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
+player_bio = player_bio.drop(columns=['Unnamed: 0'])
 
 #%% league forecasts
-league_player_stats,tc = projections_target_league(project_league,_regressed_stats,_player_bio,_league_strength,_stat_aging,_team_clusters,season)
+project_league = 'England'
+league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% game level results
 
 #standings,_,_,_ = league_table(project_league,league_player_stats)
 
 #player_value = player_valuation(project_league,league_player_stats)
+#player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
 standings,summary,player_value = game_engine(7,project_league,league_player_stats,0) #gameweek, use custom lineups
