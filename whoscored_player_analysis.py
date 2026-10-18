@@ -1151,6 +1151,54 @@ def game_engine(gw,target_league,df,custom_lineups):
     player_val = player_val[['playerId', 'name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90', 'GD90_avg_team']]
     return standings,summary,player_val
 
+def player_injury_info(league):
+    import requests
+    from bs4 import BeautifulSoup
+    
+    url = "https://www.sportsgambler.com/injuries/football/germany-bundesliga/"
+    headers = {"User-Agent": "Mozilla/5.0"}    
+    response = requests.get(url, headers=headers, timeout=30)
+    response.raise_for_status()
+    soup = BeautifulSoup(response.text, "html.parser")    
+    injury_rows = soup.find_all("div", class_="inj-row")    
+    data = []
+    
+    for row in injury_rows:
+        container = row.find("div", class_="inj-container")
+        if container is None: continue
+    
+        team_heading = row.find_previous("h3", class_="injuries-title")
+        team_name = team_heading.get_text(strip=True) if team_heading else None
+    
+        def get_text(parent, class_name):
+            element = parent.find("span", class_=class_name.split())
+            return element.get_text(strip=True) if element else None
+    
+        hidden = row.find("div", class_="injury-hidden-content")
+    
+        def get_hidden_value(label):
+            if hidden is None: return None
+    
+            for span in hidden.find_all("span", recursive=False):
+                bold = span.find("span", class_="bold-text")
+                if bold and label in bold.get_text(strip=True):
+                    return span.get_text(" ", strip=True).replace(bold.get_text(strip=True), "", 1).strip()
+            return None
+    
+        data.append({
+            "Team": team_name,
+            "Player": get_text(container, "inj-player"),
+            "Position": get_hidden_value("Position:"),
+            #"Matches": get_hidden_value("Matches:"),
+            #"Goals": get_hidden_value("Goals:"),
+            #"Assists": get_hidden_value("Assists:"),
+            "Injury": get_text(container, "inj-info"),
+            "Expected Return": get_hidden_value("Expected Return:")
+        })
+    
+    df = pd.DataFrame(data)
+    return df
+
 #%% calls
 #full_player_stats,team_stats = player_stats_extract('Italy')
 #stabilization_rate(full_player_stats)
@@ -1175,6 +1223,8 @@ project_league = 'England'
 league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% game level results
+
+#njuries_df = injury_info(project_league)
 
 #standings,_,_,_ = league_table(project_league,league_player_stats)
 
