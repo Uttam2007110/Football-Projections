@@ -17,8 +17,8 @@ from scipy.stats import skellam
 pd.options.mode.chained_assignment = None
 np.seterr(divide='ignore', invalid='ignore')
 
-path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
-#path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
+#path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
+path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
 
 season = 2027
 
@@ -139,6 +139,7 @@ def regression_player(full_player_stats,league_strength,season):
     adjusted_stats = [stat for stat in stat_list if stat not in ['age','play','MPG']]
     league_strength_by_row = league_strength.loc[data["label"],adjusted_stats].to_numpy()
     target_league_strength = league_strength.loc[target_league,adjusted_stats].to_numpy()
+    #always e^(from - to)
     data[adjusted_stats] = data[adjusted_stats].to_numpy() * np.exp(league_strength_by_row - target_league_strength)
     
     reg_mins = pd.Series(stat_reg_mins,index=stat_list,dtype=float)    
@@ -1151,61 +1152,57 @@ def game_engine(gw,target_league,df,custom_lineups):
     player_val = player_val[['playerId', 'name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90', 'GD90_avg_team']]
     return standings,summary,player_val
 
-def player_injury_info(league):
-    import requests
-    from bs4 import BeautifulSoup
+def player_availability(project_league,league_player_stats):
+    injuries_df = pd.read_excel(f'{path}/injuries.xlsx',project_league)
+    injuries_df['status'] = 0
+    injuries_df["dt"] = pd.to_datetime(injuries_df["Expected Return"],errors='coerce')
+    #nearest sunday found, how would this need to be changed for midweeks?
+    today = pd.Timestamp.now().normalize()
+    days_to_sunday = (6 - today.weekday()) if today.weekday() < 3 else -(today.weekday() + 1) % 7
+    nearest_sunday = today + pd.Timedelta(days=days_to_sunday)
+    #status changes based on nearest sunday
+    injuries_df["status"] = np.where(injuries_df["dt"] <= nearest_sunday, 1, injuries_df["status"])
+    injuries_df = injuries_df.drop_duplicates(subset='Player')
     
-    url = "https://www.sportsgambler.com/injuries/football/germany-bundesliga/"
-    headers = {"User-Agent": "Mozilla/5.0"}    
-    response = requests.get(url, headers=headers, timeout=30)
-    response.raise_for_status()
-    soup = BeautifulSoup(response.text, "html.parser")    
-    injury_rows = soup.find_all("div", class_="inj-row")    
-    data = []
-    
-    for row in injury_rows:
-        container = row.find("div", class_="inj-container")
-        if container is None: continue
-    
-        team_heading = row.find_previous("h3", class_="injuries-title")
-        team_name = team_heading.get_text(strip=True) if team_heading else None
-    
-        def get_text(parent, class_name):
-            element = parent.find("span", class_=class_name.split())
-            return element.get_text(strip=True) if element else None
-    
-        hidden = row.find("div", class_="injury-hidden-content")
-    
-        def get_hidden_value(label):
-            if hidden is None: return None
-    
-            for span in hidden.find_all("span", recursive=False):
-                bold = span.find("span", class_="bold-text")
-                if bold and label in bold.get_text(strip=True):
-                    return span.get_text(" ", strip=True).replace(bold.get_text(strip=True), "", 1).strip()
-            return None
-    
-        data.append({
-            "Team": team_name,
-            "Player": get_text(container, "inj-player"),
-            "Position": get_hidden_value("Position:"),
-            #"Matches": get_hidden_value("Matches:"),
-            #"Goals": get_hidden_value("Goals:"),
-            #"Assists": get_hidden_value("Assists:"),
-            "Injury": get_text(container, "inj-info"),
-            "Expected Return": get_hidden_value("Expected Return:")
-        })
-    
-    df = pd.DataFrame(data)
-    return df
+    #removing accents from names
+    def clean_string_key(series):
+        return (
+            series.astype(str)
+            .str.normalize('NFKD')               # Separates characters from their accents
+            .str.encode('ascii', errors='ignore')# Removes the standalone accents
+            .str.decode('utf-8')                 # Converts back to a clean string
+            #.str.lower()                        # Makes it case-insensitive
+            .str.strip()                         # Removes any accidental whitespace
+        )
+    league_player_stats['clean_name'] = clean_string_key(league_player_stats['name'])
+    injuries_df['clean_name'] = clean_string_key(injuries_df['Player'])
+    #rename players to match
+    injuries_df.loc[injuries_df['clean_name']=='Daniel Ballard','name'] = 'Dan Ballard'
+    injuries_df.loc[injuries_df['clean_name']=='Mykhaylo Mudryk','name'] = 'Mykhailo Mudryk'
+    injuries_df.loc[injuries_df['clean_name']=='Valentino Livramento','name'] = 'Tino Livramento'
+    injuries_df.loc[injuries_df['clean_name']=='Franz-Ethan Meichtry','name'] = 'Ethan Meichtry'
+    injuries_df.loc[injuries_df['clean_name']=='A. Buongiorno','name'] = 'Allesio Buongiorno'
+    injuries_df.loc[injuries_df['clean_name']=='Gleison Bremer','name'] = 'Bremer'
+    injuries_df.loc[injuries_df['clean_name']=='K. Thuram-Ulien','name'] = 'Khephren Thuram'
+    #merge
+    league_player_stats = league_player_stats.merge(injuries_df[['clean_name','status']], on='clean_name', how='outer')
+    league_player_stats['status'] = league_player_stats['status'].fillna(1)
+    #mismatched names
+    name_mismatch = league_player_stats[league_player_stats['team'].isna()]
+    name_mismatch = name_mismatch['clean_name'].to_list()
+    league_player_stats = league_player_stats[~league_player_stats['team'].isna()]
+    #play probability changes based on injury status
+    league_player_stats['play'] *= league_player_stats['status']
+    league_player_stats = league_player_stats[league_player_stats['play']>0]
+    return league_player_stats,name_mismatch
 
 #%% calls
-#full_player_stats,team_stats = player_stats_extract('Italy')
 #stabilization_rate(full_player_stats)
+#full_player_stats,team_stats = player_stats_extract('Italy')
 
 _player_stats, _team_clusters = player_stats_extract_all()
 
-player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
+_player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
 
 _league_strength = league_conversions(_player_stats,season)
 
@@ -1214,21 +1211,20 @@ _stat_aging = aging_effects(_player_stats)
 _regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
 #%% custom lineups
-player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
-player_bio = player_bio.drop(columns=['Unnamed: 0'])
+_player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
+_player_bio[['start','sub']] = _player_bio[['start','sub']].fillna(0)
+_player_bio = _player_bio.drop(columns=['Unnamed: 0'])
 
 #%% league forecasts
 project_league = 'England'
-league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
+league_player_stats,tc = projections_target_league(project_league,_regressed_stats,_player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% game level results
-
-#njuries_df = injury_info(project_league)
 
 #standings,_,_,_ = league_table(project_league,league_player_stats)
 
 #player_value = player_valuation(project_league,league_player_stats)
 #player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
-standings,summary,player_value = game_engine(7,project_league,league_player_stats,0) #gameweek, use custom lineups
+league_player_stats,unmatched_names = player_availability(project_league,league_player_stats)
+standings,summary,player_value = game_engine(8,project_league,league_player_stats,0) #gameweek, use custom lineups
