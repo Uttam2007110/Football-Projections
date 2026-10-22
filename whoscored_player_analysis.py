@@ -244,7 +244,7 @@ def league_conversions(df_full,season):
         minimum_element = min(coef_list)
         coef_list = [element - minimum_element for element in coef_list]
         #print()
-        #print(ch,coef_list)
+        print(ch,"done")
         all_eqn.append([ch] + coef_list)
         
     all_eqn = pd.DataFrame(all_eqn)
@@ -380,7 +380,7 @@ def aging_effects(player_stats):
         ).fit()
         
         age_delta_models[stat] = model.params
-        
+    print("Aging done")
     return age_delta_models
 
 def age_delta(age_delta_models, stat, age_x, age_y):
@@ -412,7 +412,8 @@ def player_stats_extract_all():
         tl['league'] = l
         df.append(pl)
         df_teams.append(tl)
-        
+     
+    print("Player stats extracted")
     team_labels = team_subclusters(df_teams)
     df_players = pd.concat(df)
     df_players = df_players.merge(team_labels[['team','season','label']], on=['team','season'], how='left')   
@@ -424,6 +425,7 @@ def player_stats_extract_all():
     df_players['positionText'] = df_players['positionText'].str.replace("defender","Defender")
     df_players['positionText'] = df_players['positionText'].str.replace("forward","Forward")
     df_players['positionText'] = df_players['positionText'].str.replace("goalkeeper","Goalkeeper")
+    print("Team clusters found")
     return df_players,team_labels
 
 def regression_player_full(full_player_stats,league_strength,season):
@@ -1202,7 +1204,7 @@ def player_availability(project_league,league_player_stats):
 
 _player_stats, _team_clusters = player_stats_extract_all()
 
-_player_bio,multi_team_players = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
+_player_bio,transfers = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
 
 _league_strength = league_conversions(_player_stats,season)
 
