@@ -1179,13 +1179,13 @@ def player_availability(project_league,league_player_stats):
     league_player_stats['clean_name'] = clean_string_key(league_player_stats['name'])
     injuries_df['clean_name'] = clean_string_key(injuries_df['Player'])
     #rename players to match
-    injuries_df.loc[injuries_df['clean_name']=='Daniel Ballard','name'] = 'Dan Ballard'
-    injuries_df.loc[injuries_df['clean_name']=='Mykhaylo Mudryk','name'] = 'Mykhailo Mudryk'
-    injuries_df.loc[injuries_df['clean_name']=='Valentino Livramento','name'] = 'Tino Livramento'
-    injuries_df.loc[injuries_df['clean_name']=='Franz-Ethan Meichtry','name'] = 'Ethan Meichtry'
-    injuries_df.loc[injuries_df['clean_name']=='A. Buongiorno','name'] = 'Allesio Buongiorno'
-    injuries_df.loc[injuries_df['clean_name']=='Gleison Bremer','name'] = 'Bremer'
-    injuries_df.loc[injuries_df['clean_name']=='K. Thuram-Ulien','name'] = 'Khephren Thuram'
+    injuries_df.loc[injuries_df['clean_name']=='Daniel Ballard','clean_name'] = 'Dan Ballard'
+    injuries_df.loc[injuries_df['clean_name']=='Mykhaylo Mudryk','clean_name'] = 'Mykhailo Mudryk'
+    injuries_df.loc[injuries_df['clean_name']=='Valentino Livramento','clean_name'] = 'Tino Livramento'
+    injuries_df.loc[injuries_df['clean_name']=='Franz-Ethan Meichtry','clean_name'] = 'Ethan Meichtry'
+    injuries_df.loc[injuries_df['clean_name']=='A. Buongiorno','clean_name'] = 'Allesio Buongiorno'
+    injuries_df.loc[injuries_df['clean_name']=='Gleison Bremer','clean_name'] = 'Bremer'
+    injuries_df.loc[injuries_df['clean_name']=='K. Thuram-Ulien','clean_name'] = 'Khephren Thuram'
     #merge
     league_player_stats = league_player_stats.merge(injuries_df[['clean_name','status']], on='clean_name', how='outer')
     league_player_stats['status'] = league_player_stats['status'].fillna(1)
