@@ -17,8 +17,8 @@ from scipy.stats import skellam
 pd.options.mode.chained_assignment = None
 np.seterr(divide='ignore', invalid='ignore')
 
-#path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
-path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
+path = 'C:/Users/Subramanya.Ganti/Downloads/Sports/football/whoscored'
+#path = 'C:/Users/uttam/Desktop/Sports/football/whoscored'
 
 season = 2027
 
@@ -127,7 +127,7 @@ def regression_player(full_player_stats,league_strength,season):
     stat_list = ['age','play','MPG','ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl',
                  'G%','A%','Save%','dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
                  'tackle_success%','PssA','Head','aerial_win%']
-    stat_reg_mins = [1,0,6000,2000,1000,2000,6000,15000,2000,2000,2000,2000,2000,2000,2000,2000,1000,2000,2000,
+    stat_reg_mins = [1,0,500,2000,1000,2000,6000,15000,2000,2000,2000,2000,2000,2000,2000,2000,1000,2000,2000,
                      3000,5000,12000,9000,3000,2000,1000,9000,9000,6000,2000,2000,3000]
     
     data = full_player_stats.copy()
@@ -136,7 +136,7 @@ def regression_player(full_player_stats,league_strength,season):
     data['s_weight2'] = np.exp(data['season']-season)
     
     #apply league strength conversions on data
-    adjusted_stats = [stat for stat in stat_list if stat not in ['age','play','MPG']]
+    adjusted_stats = [stat for stat in stat_list if stat not in ['age']] #,'play','MPG'
     league_strength_by_row = league_strength.loc[data["label"],adjusted_stats].to_numpy()
     target_league_strength = league_strength.loc[target_league,adjusted_stats].to_numpy()
     #always e^(from - to)
@@ -193,6 +193,7 @@ def league_conversions(df_full,season):
     #season = 2027    
     #df,leagues = player_stats_extract_all() #list of dataframes for each league
     
+    df_full['play'] = df_full['apps']/df_full['P']
     df = []
     leagues = df_full['label'].drop_duplicates().to_list()
     for l in leagues:
@@ -202,7 +203,8 @@ def league_conversions(df_full,season):
     all_eqn = [['category'] + leagues]
     
     categories = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%','Save%',
-                 'dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%','tackle_success%','aerial_win%','PssA']
+                 'dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
+                 'tackle_success%','aerial_win%','PssA','MPG','play']
     
     for ch in categories:
         #ch = 'Save%'
@@ -320,10 +322,12 @@ def player_age_correction(player_stats,season,offseason,refresh_teams):
 
 def aging_effects(player_stats):
     categories = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%','Save%',
-                 'dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%','tackle_success%','aerial_win%','PssA']
+                 'dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
+                 'tackle_success%','aerial_win%','PssA','MPG','play']
     
     min_minutes, reference_age, spline_df = 500, 27, 5
     data = player_stats.copy()
+    data['play'] = data['apps']/data['P']
     data[['age','minsPlayed'] + categories] = data[['age','minsPlayed'] + categories].apply(pd.to_numeric, errors='coerce')
     data = data.dropna(subset=['playerId','age','minsPlayed'])
     data = data[data['minsPlayed'] >= min_minutes]
@@ -547,8 +551,9 @@ def relevant_team_label(target_league,team_clusters,season):
     return tc_pivot
 
 def projections_target_league(target_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season):
-    available_stats = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%','Save%',
-                 'dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%','tackle_success%','aerial_win%','PssA']
+    available_stats = ['ShA','Sh','Blk','YC','RC','Clr','Drb','FlsW','Fls','Int','Pss','KP','KP/P','TO%','Off','Tkl','Head','G%','A%',
+                       'Save%','dribble_win%','long_success%','short_success%','long_bias','shots_target%','shots_blocked%',
+                       'tackle_success%','aerial_win%','PssA','MPG','play']
     
     regressed_stats = regressed_stats.merge(player_bio[['playerId','age','team','start','sub']], on=['playerId'], how='left')
     age_adjusted_projection = regressed_stats.copy()
@@ -646,34 +651,30 @@ def player_target_credits(players, training_teams, model, target):
     if(not np.isfinite(reference_stats.to_numpy(dtype=float)).all()):
         raise ValueError("Training reference contains NaN or infinity")
 
-    def team_features(frame, evaluated_mask=None):
-        # Minutes were adjusted once below; do not multiply by appearance probability again.
-        lineup = frame.assign(play=1).copy()
-        if(evaluated_mask is not None):
-            weights = lineup.loc[evaluated_mask, 'MPG']
-            lineup.loc[evaluated_mask, 'MPG'] = 90 * weights/weights.sum()
-            for keeper_group, total in [(True, 90), (False, 900)]:
-                group = lineup['positionText'].eq('Goalkeeper').to_numpy() == keeper_group
-                remaining = group & ~evaluated_mask
-                budget = total - lineup.loc[group & evaluated_mask, 'MPG'].sum()
-                remaining_minutes = lineup.loc[remaining, 'MPG'].sum()
-                if(budget < -1e-10 or (budget > 1e-10 and remaining_minutes <= 0)):
-                    raise ValueError(f"{team}: insufficient teammates to pin evaluated player to 90 minutes")
-                if(remaining_minutes > 0):
-                    lineup.loc[remaining, 'MPG'] *= max(budget, 0)/remaining_minutes
-        adjusted, totals = mins_adjustment(lineup, 0)
-        features = totals.loc[VARIABLES].to_frame().T.astype(float)
+    def features_from_totals(totals):
+        features = totals_to_features(pd.DataFrame(totals, columns=_TEAM_COUNT_COLUMNS))[VARIABLES].astype(float)
         if(not np.isfinite(features.to_numpy()).all()):
             invalid = features.columns[~np.isfinite(features.to_numpy()).all(axis=0)].tolist()
             raise ValueError(f"{team}: invalid aggregated inputs: {invalid}")
-        if(evaluated_mask is not None):
-            evaluation_minutes = adjusted.loc[lineup.index[evaluated_mask], 'MPG'].sum()
-            if(not np.isfinite(evaluation_minutes) or evaluation_minutes <= 0):
-                raise ValueError(f"{team}: invalid evaluated player minutes")
-            if(not np.isclose(evaluation_minutes, 90, rtol=1e-9, atol=1e-10)):
-                raise ValueError(f"{team}: evaluated player minutes were not pinned to 90")
-            return features, evaluation_minutes
         return features
+
+    def pinned_minutes(minutes, keeper, evaluated_mask):
+        # Pin the evaluated player to 90 and rescale teammates to the remaining 90/900 budgets.
+        pinned = minutes.copy()
+        weights = pinned[evaluated_mask]
+        pinned[evaluated_mask] = 90 * weights/weights.sum()
+        for keeper_group, total in [(True, 90), (False, 900)]:
+            group = keeper == keeper_group
+            remaining = group & ~evaluated_mask
+            budget = total - pinned[group & evaluated_mask].sum()
+            remaining_minutes = pinned[remaining].sum()
+            if(budget < -1e-10 or (budget > 1e-10 and remaining_minutes <= 0)):
+                raise ValueError(f"{team}: insufficient teammates to pin evaluated player to 90 minutes")
+            if(remaining_minutes > 0):
+                pinned[remaining] *= max(budget, 0)/remaining_minutes
+        if(not np.isclose(pinned[evaluated_mask].sum(), 90, rtol=1e-9, atol=1e-10)):
+            raise ValueError(f"{team}: evaluated player minutes were not pinned to 90")
+        return pinned
 
     records, team_records = [], []
 
@@ -723,32 +724,31 @@ def player_target_credits(players, training_teams, model, target):
         reference['Save%'] = 0.0
         reference.loc[keepers, 'Save%'] = reference_stats['Save%'] * 90/keeper_minutes
 
-        reference_inputs = team_features(reference)
+        # Per-90 counts for actual (A) and reference (R) rows; minutes are applied by matrix product.
+        A = add_derived_counts(actual.copy())[_TEAM_COUNT_COLUMNS].to_numpy(dtype=float)
+        R = add_derived_counts(reference.copy())[_TEAM_COUNT_COLUMNS].to_numpy(dtype=float)
+
+        reference_inputs = features_from_totals((minutes @ R)[None, :]/90)
         if(not np.allclose(reference_inputs.iloc[0], reference_stats, rtol=1e-6, atol=1e-10)):
             raise ValueError(f"Reference aggregation does not reproduce training means for {team}")
 
         player_ids = actual['playerId'].drop_duplicates().to_numpy()
-        masks = [actual['playerId'].eq(pid).to_numpy() for pid in player_ids]
-        player_minutes = np.array([minutes[mask].sum() for mask in masks])
+        masks = np.vstack([actual['playerId'].eq(pid).to_numpy() for pid in player_ids])
+        player_minutes = (masks * minutes).sum(axis=1)
         minute_share = player_minutes/player_minutes.sum()
 
-        # Build all hypothetical team inputs, then predict them together.
-        feature_rows = [reference_inputs, team_features(actual)]
-        evaluation_minutes = []
+        # Pinned minutes are identical across the 4 contexts of a player (same MPG/positionText rows).
+        keeper_rows = actual['positionText'].eq('Goalkeeper').to_numpy()
+        pinned = np.vstack([pinned_minutes(minutes, keeper_rows, mask) for mask in masks])
+        swap = (pinned * masks) @ (A - R)
+        reference_totals, actual_totals = pinned @ R, pinned @ A
+        # Per player: reference_with_player, reference, actual, actual_without_player.
+        contexts = np.stack([reference_totals + swap, reference_totals,
+                             actual_totals, actual_totals - swap], axis=1).reshape(-1, len(_TEAM_COUNT_COLUMNS))
+        all_totals = np.vstack([minutes @ R, minutes @ A, contexts])/90
+        X_batch = features_from_totals(all_totals)
+        evaluation_minutes = np.full((len(player_ids), 4), 90.0)
         
-        for mask in masks:
-            reference_with_player = reference.copy()
-            reference_with_player.loc[mask, :] = actual.loc[mask, :]
-            actual_without_player = actual.copy()
-            actual_without_player.loc[mask, :] = reference.loc[mask, :]
-            context_minutes = []
-            for lineup in [reference_with_player, reference, actual, actual_without_player]:
-                features, evaluated_minutes = team_features(lineup, mask)
-                feature_rows.append(features)
-                context_minutes.append(evaluated_minutes)
-            evaluation_minutes.append(context_minutes)
-        
-        X_batch = pd.concat(feature_rows, ignore_index=True)
         predictions = np.asarray(model.predict(X_batch), dtype=float)
         if(predictions.ndim != 1 or len(predictions) != 2 + 4*len(player_ids)):
             raise ValueError(f"{team}: expected one prediction per hypothetical team, got {predictions.shape}")
@@ -757,7 +757,6 @@ def player_target_credits(players, training_teams, model, target):
         
         reference_value, team_prediction = predictions[:2]
         player_predictions = predictions[2:].reshape(len(player_ids), 4)
-        evaluation_minutes = np.asarray(evaluation_minutes)
         
         # Express 90-minute evaluation impacts at each player's original minutes.
         standalone = (player_predictions[:, 0] - player_predictions[:, 1]) * (
@@ -831,7 +830,7 @@ def mins_adjustment(df,game_level):
     variables = ['possession','Pace','long_success%','short_success%','long_bias','Sh','shots_target%','shots_blocked%',
                  'KP','TO%','Drb','dribble_win%', 'FlsW', 'FlsC', 'Tkl','tackle_success%', 'Int','Blk','Clr', 'Off',
                  'Head', 'aerial_win%', 'YC', 'RC', 'ShA','Save%']
-    
+
     if(game_level == 1):
         starter_keeper = df[(df['positionText']=='Goalkeeper')&(df['start']==1)]
         sub_keeper = df[(df['positionText']=='Goalkeeper')&(df['sub']==1)]
@@ -839,7 +838,7 @@ def mins_adjustment(df,game_level):
         subs = df[(df['positionText']!='Goalkeeper')&(df['sub']==1)]
         
         starter_keeper_mins = starter_keeper['MPG'].sum()
-        if(starter_keeper_mins>90): 
+        if(starter_keeper_mins>90):
             starter_keeper_mins = 90
             starter_keeper['MPG'] *= 90/starter_keeper['MPG'].sum()
             
@@ -854,22 +853,59 @@ def mins_adjustment(df,game_level):
         team_df = pd.concat([starter_keeper,sub_keeper,starters,subs])
         team_df = team_df.sort_values(by=['MPG'], ascending=[False])
     else:
+        #new method
+        key = 'positionText' #positionText or cluster
+        df_pivot = df.pivot_table(index=key,values='MPG',aggfunc='sum')
+        df_pivot = df_pivot.reset_index()
+        if(key=='cluster'): df_pivot[df_pivot[key]!=0]
+        else: df_pivot = df_pivot[df_pivot[key]!='Goalkeeper']
+        df_pivot['MPG'] = 900*df_pivot['MPG']/df_pivot['MPG'].sum()
+        #play probability changes based on injury status
+        try:
+            df['play'] *= df['status']
+            df = df[df['play']>0]
+        except KeyError:
+            #for finding player avg values status wont be in the df, assume 1
+            df
+        #keepers, old logic is ok
         keepers = df[df['positionText']=='Goalkeeper']
         keepers['play_rank'] = keepers['play'].rank(ascending=False, method='dense')
         keepers['MPG'] *= keepers['play'] * pow(1/4,keepers['play_rank']-1) #keeper mins need to be decayed more aggressively
         keepers['MPG'] *= 90/keepers['MPG'].sum()
-        others = df[df['positionText']!='Goalkeeper']
-        others['play_rank'] = others['play'].rank(ascending=False, method='dense')
-        others['MPG'] *= others['play'] * pow(.99,others['play_rank']-1) #outfielders mins need to be decayed less aggressively
-        while(others['MPG'].sum()<=899 or others['MPG'].sum()>=901):
-            others['MPG'] *= 900/others['MPG'].sum()
-            others['MPG'] = others['MPG'].clip(upper=89)
-        #final adjustment to make it 900
-        others['MPG'] *= 900/others['MPG'].sum()
-        team_df = pd.concat([keepers,others])
+        #outfielders mins logic changed
+        team_df = keepers.copy()
+        for p in df_pivot[key].drop_duplicates():
+            others = df[df[key]==p] #df[df['positionText']!='Goalkeeper']
+            p_target_mins = df_pivot.loc[df_pivot[key]==p,'MPG'].sum()
+            others['play_rank'] = others['play'].rank(ascending=False, method='dense')
+            others['MPG'] *= others['play'] * pow(.975,others['play_rank']-1) #outfielders mins need to be decayed less aggressively
+            #print(p,p_target_mins,others)
+            if(p_target_mins>len(others)*85): p_target_mins = len(others)*85
+            exp = 1
+            while((others['MPG'].sum()<=p_target_mins-1 or others['MPG'].sum()>=p_target_mins+1) and (len(others)>0)):
+                others['MPG'] *= np.pow(exp,others['play_rank']) #p_target_mins/others['MPG'].sum()
+                others['MPG'] = others['MPG'].clip(upper=85) #!!!review this
+                if(others['MPG'].sum()>p_target_mins+1): exp-= 0.001
+                if(others['MPG'].sum()<p_target_mins-1): exp+= 0.001
+            #final adjustment to make it 900
+            others['MPG'] *= p_target_mins/others['MPG'].sum()
+            team_df = pd.concat([team_df,others]) #pd.concat([keepers,others])
+        
         team_df = team_df.sort_values(by=['MPG'], ascending=[False])
     
     #percentage based stats need to be recalculated
+    team_df = add_derived_counts(team_df)
+    totals = team_df[_TEAM_COUNT_COLUMNS].mul(team_df['MPG']/90, axis=0).sum()
+    totals = totals_to_features(totals.to_frame().T).iloc[0].rename(None)
+    totals = totals.loc[variables]
+    return team_df,totals
+
+# Per-90 player counts that are summed (MPG/90 weighted) to form team totals.
+_TEAM_COUNT_COLUMNS = ['Pss','PssA','Sh','ShA','Drb','FlsW','Fls','Tkl','Int','Blk','Clr','TO%','Off','YC','RC',
+                      'KP','Head','Save%','aerial_win','dribble_win','long_success','short_success','long_att',
+                      'short_att','shots_target','shots_blocked','tackle_success']
+
+def add_derived_counts(team_df):
     team_df['long_att%'] = team_df['long_bias']/(team_df['long_bias']+1)
     team_df['aerial_win'] = team_df['aerial_win%'] * team_df['Head']
     team_df['dribble_win'] = team_df['dribble_win%'] * team_df['Drb']
@@ -880,37 +916,39 @@ def mins_adjustment(df,game_level):
     team_df['shots_target'] = team_df['shots_target%'] * team_df['Sh']
     team_df['shots_blocked'] = team_df['shots_blocked%'] * team_df['Sh']
     team_df['tackle_success'] = team_df['tackle_success%'] * team_df['Tkl']
-    
-    totals = team_df.select_dtypes(include='number').mul(team_df['MPG']/90, axis=0).sum()
-    totals['aerial_win%'] = totals['aerial_win']/totals['Head']
-    totals['dribble_win%'] = totals['dribble_win']/totals['Drb']
-    totals['long_success%'] = totals['long_success']/totals['long_att']
-    totals['short_success%'] = totals['short_success']/totals['short_att']
-    totals['long_bias'] = totals['long_att']/totals['short_att']
-    totals['shots_target%'] = totals['shots_target']/totals['Sh']
-    totals['shots_blocked%'] = totals['shots_blocked']/totals['Sh']
-    totals['tackle_success%'] = totals['tackle_success']/totals['Tkl']
-    
-    totals['Pace'] = totals['Pss'] + totals['PssA']
-    totals['Sh'] = totals['Sh']/totals['Pss']
-    totals['ShA'] = totals['ShA']/totals['PssA']
-    totals['Drb'] = totals['Drb']/totals['Pss']
-    totals['FlsW'] = totals['FlsW']/totals['Pss']
-    totals['FlsC'] = totals['Fls']/totals['PssA']
-    totals['Tkl'] = totals['Tkl']/totals['PssA']
-    totals['Int'] = totals['Int']/totals['PssA']
-    totals['Blk'] = totals['Blk']/totals['PssA']
-    totals['Clr'] = totals['Clr']/totals['Pss']
-    totals['TO%'] = totals['TO%']/totals['Pss']
-    totals['Off'] = totals['Off']/totals['PssA']
-    totals['YC'] = totals['YC']/totals['PssA']
-    totals['RC'] = totals['RC']/totals['PssA']
-    totals['KP'] = totals['KP']/totals['Pss']
-    totals['Head'] = totals['Head']/totals['PssA']
-    totals['possession'] = totals['Pss']/(totals['Pss']+totals['PssA'])
-    totals = totals.loc[totals.index.isin(variables)]
-    totals = totals.loc[variables]
-    return team_df,totals
+    return team_df
+
+def totals_to_features(totals):
+    """Convert summed team counts (one row per team/context) into model inputs."""
+    t = totals
+    out = pd.DataFrame(index=t.index)
+    out['possession'] = t['Pss']/(t['Pss']+t['PssA'])
+    out['Pace'] = t['Pss'] + t['PssA']
+    out['long_success%'] = t['long_success']/t['long_att']
+    out['short_success%'] = t['short_success']/t['short_att']
+    out['long_bias'] = t['long_att']/t['short_att']
+    out['Sh'] = t['Sh']/t['Pss']
+    out['shots_target%'] = t['shots_target']/t['Sh']
+    out['shots_blocked%'] = t['shots_blocked']/t['Sh']
+    out['KP'] = t['KP']/t['Pss']
+    out['TO%'] = t['TO%']/t['Pss']
+    out['Drb'] = t['Drb']/t['Pss']
+    out['dribble_win%'] = t['dribble_win']/t['Drb']
+    out['FlsW'] = t['FlsW']/t['Pss']
+    out['FlsC'] = t['Fls']/t['PssA']
+    out['Tkl'] = t['Tkl']/t['PssA']
+    out['tackle_success%'] = t['tackle_success']/t['Tkl']
+    out['Int'] = t['Int']/t['PssA']
+    out['Blk'] = t['Blk']/t['PssA']
+    out['Clr'] = t['Clr']/t['Pss']
+    out['Off'] = t['Off']/t['PssA']
+    out['Head'] = t['Head']/t['PssA']
+    out['aerial_win%'] = t['aerial_win']/t['Head']
+    out['YC'] = t['YC']/t['PssA']
+    out['RC'] = t['RC']/t['PssA']
+    out['ShA'] = t['ShA']/t['PssA']
+    out['Save%'] = t['Save%']
+    return out
 
 def league_table(target_league,df):
     totals_df = []; team_list = []
@@ -1029,23 +1067,16 @@ def player_valuation_average_team(target_league, league_player_stats, formation=
         raise ValueError(f"positionText values not present in the formation: {list(unknown)}")
     players['Save%'] = np.where(players['positionText'] == 'Goalkeeper', players['Save%'], 0)
 
-    def lineup_features(lineup):
-        # every player in the lineup, evaluated or average, is pinned to 90 minutes
-        lineup = lineup.copy()
-        lineup['MPG'] = 90.0
-        lineup['play'] = 1.0
-        adjusted, totals = mins_adjustment(lineup, 0)
-        if(not np.allclose(adjusted['MPG'], 90.0)):
-            raise ValueError("Average-team lineup minutes were not kept at 90 per player")
-        return totals.to_frame().T
-
-    feature_rows = [lineup_features(base_team)]
-    for _, player in players.iterrows():
-        lineup = base_team.copy()
-        slot = lineup.index[lineup['positionText'] == player['positionText']][0]
-        lineup.loc[slot, stat_columns] = player[stat_columns].to_numpy(dtype=float)
-        feature_rows.append(lineup_features(lineup))
-    features = pd.concat(feature_rows, ignore_index=True).astype(float)
+    # Every lineup player (evaluated or average) plays 90 minutes, so team totals are plain sums
+    # of per-90 counts; no minutes allocation (mins_adjustment) is needed.
+    base_counts = add_derived_counts(base_team.copy())[_TEAM_COUNT_COLUMNS].astype(float)
+    player_counts = add_derived_counts(players[stat_columns].astype(float))[_TEAM_COUNT_COLUMNS].to_numpy()
+    position_counts = add_derived_counts(profiles[stat_columns].astype(float).copy())[_TEAM_COUNT_COLUMNS]
+    base_totals = base_counts.sum().to_numpy()
+    # Swap one average player of the same positionText for the evaluated player.
+    swapped_totals = base_totals - position_counts.loc[players['positionText']].to_numpy() + player_counts
+    features = totals_to_features(pd.DataFrame(np.vstack([base_totals, swapped_totals]),
+                                               columns=_TEAM_COUNT_COLUMNS)).astype(float)
     if(not np.isfinite(features.to_numpy()).all()):
         bad = features.columns[~np.isfinite(features.to_numpy()).all(axis=0)].tolist()
         raise ValueError(f"Non-finite aggregated team inputs: {bad}")
@@ -1152,6 +1183,7 @@ def game_engine(gw,target_league,df,custom_lineups):
     player_val_avg_team = player_val_avg_team[['playerId','GF90','GA90','GD90']].rename(columns={'GF90':'GF90_avg_team','GA90':'GA90_avg_team','GD90':'GD90_avg_team'})
     player_val = player_val.merge(player_val_avg_team, on='playerId', how='outer')
     player_val = player_val[['playerId', 'name', 'team', 'positionText', 'minutes', 'GF90', 'GA90', 'GD90', 'GD90_avg_team']]
+    player_val = player_val.dropna()
     return standings,summary,player_val
 
 def player_availability(project_league,league_player_stats):
@@ -1193,10 +1225,20 @@ def player_availability(project_league,league_player_stats):
     name_mismatch = league_player_stats[league_player_stats['team'].isna()]
     name_mismatch = name_mismatch['clean_name'].to_list()
     league_player_stats = league_player_stats[~league_player_stats['team'].isna()]
-    #play probability changes based on injury status
-    league_player_stats['play'] *= league_player_stats['status']
-    league_player_stats = league_player_stats[league_player_stats['play']>0]
     return league_player_stats,name_mismatch
+
+def correct_player_positions(league_player_stats,threshold):
+    #threshold = 0.2
+    outfield = league_player_stats['positionText'].ne('Goalkeeper')
+    counts = pd.crosstab(league_player_stats.loc[outfield, 'cluster'], league_player_stats.loc[outfield, 'positionText'])
+    share = counts.div(counts.sum(axis=1), axis=0)
+    dominant = counts.idxmax(axis=1)
+    
+    key = pd.MultiIndex.from_frame(league_player_stats[['cluster','positionText']])
+    pos_share = pd.Series(share.stack().reindex(key).to_numpy(), index=league_player_stats.index)
+    change = outfield & pos_share.lt(threshold)
+    league_player_stats.loc[change, 'positionText'] = league_player_stats.loc[change, 'cluster'].map(dominant)
+    return league_player_stats
 
 #%% calls
 #stabilization_rate(full_player_stats)
@@ -1204,7 +1246,7 @@ def player_availability(project_league,league_player_stats):
 
 _player_stats, _team_clusters = player_stats_extract_all()
 
-_player_bio,transfers = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
+player_bio,transfers = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
 
 _league_strength = league_conversions(_player_stats,season)
 
@@ -1213,13 +1255,17 @@ _stat_aging = aging_effects(_player_stats)
 _regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
 #%% custom lineups
-_player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-_player_bio[['start','sub']] = _player_bio[['start','sub']].fillna(0)
-_player_bio = _player_bio.drop(columns=['Unnamed: 0'])
+player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
+player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
+player_bio = player_bio.drop(columns=['Unnamed: 0'])
 
 #%% league forecasts
-project_league = 'England'
-league_player_stats,tc = projections_target_league(project_league,_regressed_stats,_player_bio,_league_strength,_stat_aging,_team_clusters,season)
+project_league = 'Italy'
+league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
+
+#%% correct player positions and apply injury news
+league_player_stats = correct_player_positions(league_player_stats,1) #threshold to change player position for a subcluster
+league_player_stats,unmatched_names = player_availability(project_league,league_player_stats)
 
 #%% game level results
 
@@ -1228,5 +1274,4 @@ league_player_stats,tc = projections_target_league(project_league,_regressed_sta
 #player_value = player_valuation(project_league,league_player_stats)
 #player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
-league_player_stats,unmatched_names = player_availability(project_league,league_player_stats)
 standings,summary,player_value = game_engine(8,project_league,league_player_stats,0) #gameweek, use custom lineups
