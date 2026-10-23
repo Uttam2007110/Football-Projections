@@ -19,7 +19,7 @@ def player_injury_info(s):
     print(s)
     url = f"https://www.sportsgambler.com/injuries/football/{s}/"
     headers = {"User-Agent": "Mozilla/5.0"}    
-    response = requests.get(url, headers=headers, timeout=30)
+    response = requests.get(url, headers=headers)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")    
     injury_rows = soup.find_all("div", class_="inj-row")    
