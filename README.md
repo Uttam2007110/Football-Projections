@@ -1,2 +1,2 @@
 # Football-Projections
-Football projections from fbref data
+Football projections from whoscored data
