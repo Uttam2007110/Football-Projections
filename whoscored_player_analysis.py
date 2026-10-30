@@ -1174,12 +1174,30 @@ def game_engine(gw,target_league,df,regstats,custom_lineups):
         #apply home advantage
         game_gf*= home_f
         game_ga*= away_f
-        #summary stats
-        t1_cs = poisson.pmf(0, game_ga)
-        t2_cs = poisson.pmf(0, game_gf)
-        draw = skellam.pmf(0,game_gf,game_ga) * 100
-        t1_win = (1-skellam.cdf(0,game_gf,game_ga)) * 100
-        t2_win = (skellam.cdf(-1,game_gf,game_ga)) * 100
+        #Dixon-Coles approach for summary stats
+        rho = -0.13 #!!!verify
+        lam, mu = float(game_gf), float(game_ga)
+        tau = np.array([
+            1 - lam * mu * rho,   # 0-0
+            1 + lam * rho,        # 0-1
+            1 + mu * rho,         # 1-0
+            1 - rho,              # 1-1
+        ])
+        if(not np.isfinite(tau).all() or (tau < 0).any()):
+            #default back to simple skellam
+            t1_cs = poisson.pmf(0, game_ga)
+            t2_cs = poisson.pmf(0, game_gf)
+            draw = skellam.pmf(0,game_gf,game_ga) * 100
+            t1_win = (1-skellam.cdf(0,game_gf,game_ga)) * 100
+            t2_win = (skellam.cdf(-1,game_gf,game_ga)) * 100
+        else:
+            t1_cs = poisson.pmf(0, mu)
+            t2_cs = poisson.pmf(0, lam)
+            correction = rho * poisson.pmf(1, lam) * poisson.pmf(1, mu)
+            draw = (skellam.pmf(0, lam, mu) - 2 * correction) * 100
+            t1_win = (1-skellam.cdf(0, lam, mu) + correction) * 100
+            t2_win = (skellam.cdf(-1, lam, mu) + correction) * 100
+        #prints
         print(home_teams[t],round(t1_win,2),"draw",round(draw,2),away_teams[t],round(t2_win,2))
         print(home_teams[t],'goals',round(game_gf,2),'CS%',round(100*t1_cs,2))
         print(away_teams[t],'goals',round(game_ga,2),'CS%',round(100*t2_cs,2))
@@ -1221,7 +1239,8 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     days_to_sunday = (6 - today.weekday()) if today.weekday() < 3 else -(today.weekday() + 1) % 7
     nearest_sunday = today + pd.Timedelta(days=days_to_sunday)
     #status changes based on nearest sunday
-    injuries_df["status"] = np.where(injuries_df["dt"] <= nearest_sunday, 0.5, injuries_df["status"])
+    injuries_df["status"] = np.where(injuries_df["dt"] <= nearest_sunday, 0.75, injuries_df["status"])
+    injuries_df["status"] = np.where(injuries_df["dt"].isna(), 0.5, injuries_df["status"])
     injuries_df = injuries_df.drop_duplicates(subset='Player')
     
     #removing accents from names
@@ -1253,6 +1272,8 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     injuries_df.loc[injuries_df['clean_name']=='K. Kvaratskhelia','clean_name'] = 'Khvicha Kvaratskhelia'
     injuries_df.loc[injuries_df['clean_name']=='J. Strand Larsen','clean_name'] = 'Jrgen Strand Larsen'
     injuries_df.loc[injuries_df['clean_name']=='M. Fernandez-Pardo','clean_name'] = 'Matias Fernandez-Pardo'
+    injuries_df.loc[injuries_df['clean_name']=='Vitaliy Mykolenko','clean_name'] = 'Vitalii Mykolenko'
+    injuries_df.loc[injuries_df['clean_name']=='I. Ruiz de','clean_name'] = 'Inigo Ruiz de Galarreta'
     #merge
     league_player_stats = league_player_stats.merge(injuries_df[['clean_name','status']], on='clean_name', how='outer')
     league_player_stats['status'] = league_player_stats['status'].fillna(1)
@@ -1304,7 +1325,7 @@ player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
 player_bio = player_bio.drop(columns=['Unnamed: 0'])
 
 #%% league forecasts
-project_league = 'Spain'
+project_league = 'England'
 league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% correct player positions and apply injury news
@@ -1317,4 +1338,4 @@ league_player_stats,unmatched_names,injuries_df = player_availability(project_le
 #player_value = player_valuation(project_league,league_player_stats)
 #player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
-standings,summary,player_value = game_engine(9,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
+standings,summary,player_value = game_engine(10,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
