@@ -259,16 +259,17 @@ def league_conversions(df_full,season):
     all_eqn = all_eqn.apply(pd.to_numeric, errors='ignore')    
     return all_eqn
 
-def team_subclusters(team_stats_list):
+def team_subclusters(team_stats_list,n):
     from sklearn.cluster import KMeans
     from sklearn.preprocessing import StandardScaler
+    from scipy.special import softmax
 
     team_stats = pd.concat(team_stats_list)
     team_stats = team_stats[['team','league','season','P','GD','possession']]
     
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(team_stats[['GD','possession']])
-    kmeans = KMeans(n_clusters=3, init='k-means++', n_init=50, random_state=42, algorithm="lloyd")
+    kmeans = KMeans(n_clusters=n, init='k-means++', n_init=50, random_state=42, algorithm="lloyd")
     kmeans.fit(X_scaled)
     
     #relabeling to ensure order is consistent
@@ -282,6 +283,15 @@ def team_subclusters(team_stats_list):
     team_stats['cluster'] = label_map[raw_labels] #kmeans.labels_
     team_stats['label'] = team_stats['league']+"_"+team_stats['cluster'].astype(str)
     team_stats = team_stats[['team','season','label','P']]
+    
+    # Reorder distances to match canonical cluster labels 0, 1, ..., n-1.
+    squared_distances = kmeans.transform(X_scaled)[:, cluster_order] ** 2
+    variance = max(kmeans.inertia_ / X_scaled.size, np.finfo(float).eps)
+    memberships = softmax(-squared_distances / (2 * variance), axis=1)
+    
+    membership_cols = [i for i in range(n)]
+    team_stats[membership_cols] = memberships
+    team_stats = team_stats[['team','season','label','P'] + membership_cols]
     return team_stats
 
 def player_transfers(player_stats,season):
@@ -420,7 +430,7 @@ def player_stats_extract_all(season):
         df_teams.append(tl)
      
     print("Player stats extracted")
-    team_labels = team_subclusters(df_teams)
+    team_labels = team_subclusters(df_teams,3)
     df_players = pd.concat(df)
     df_players = df_players.merge(team_labels[['team','season','label']], on=['team','season'], how='left')   
     df_players['age'] = np.where(df_players['season']<2027,df_players['age']+df_players['season']-2026,df_players['age'])
@@ -456,7 +466,7 @@ def regression_player_full(full_player_stats,league_strength,season):
 
     #usually 8, sometimes 7
     def best_gmm(data, min_k=4, max_k=11, max_rows=4000, patience=2, random_state=0):
-        """Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening."""
+        #Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening
         rng = np.random.default_rng(random_state)
         sample = data[rng.choice(len(data), max_rows, replace=False)] if len(data) > max_rows else data
         best_model, best_bic, worse = None, np.inf, 0
@@ -505,51 +515,95 @@ def regression_player_full(full_player_stats,league_strength,season):
 
 def relevant_team_label(target_league,team_clusters,season):
     tc = team_clusters.copy()
+    
     if(target_league == 'Germany2'):
-        tc['alternate'] = np.where(tc['label'].str.contains('Germany_'),'Germany2_0',pd.NA)
+        tc[0] = np.where(tc['label'].str.contains('Germany_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('Germany_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('Germany_'),0,tc[2])
     elif(target_league == 'England2'):
-        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England2_0',pd.NA)
-        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England2_2',tc['alternate'])
-        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England2_2',tc['alternate'])
+        tc[0] = np.where(tc['label'].str.contains('England_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England_'),0,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England3_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England3_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England3_'),1,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England4_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England4_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England4_'),1,tc[2])
     elif(target_league == 'England3'):
-        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England3_0',pd.NA)
-        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England3_0',tc['alternate'])
-        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England3_2',tc['alternate'])
+        tc[0] = np.where(tc['label'].str.contains('England_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England_'),0,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England2_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England2_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England2_'),0,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England4_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England4_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England4_'),1,tc[2])
     elif(target_league == 'England4'):
-        tc['alternate'] = np.where(tc['label'].str.contains('England_'),'England4_0',pd.NA)
-        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England4_0',tc['alternate'])
-        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England4_0',tc['alternate'])
+        tc[0] = np.where(tc['label'].str.contains('England_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England_'),0,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England2_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England2_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England2_'),0,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England3_'),1,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England3_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England3_'),0,tc[2])
     elif(target_league == 'Germany'):
-        tc['alternate'] = np.where(tc['label'].str.contains('Germany2_'),'Germany_2',pd.NA)
+        tc[0] = np.where(tc['label'].str.contains('Germany2_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('Germany2_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('Germany2_'),1,tc[2])
     elif(target_league == 'England'):
-        tc['alternate'] = np.where(tc['label'].str.contains('England2_'),'England_2',pd.NA)
-        tc['alternate'] = np.where(tc['label'].str.contains('England3_'),'England_2',tc['alternate'])
-        tc['alternate'] = np.where(tc['label'].str.contains('England4_'),'England_2',tc['alternate'])
+        tc[0] = np.where(tc['label'].str.contains('England2_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England2_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England2_'),1,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England3_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England3_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England3_'),1,tc[2])
+        tc[0] = np.where(tc['label'].str.contains('England4_'),0,tc[0])
+        tc[1] = np.where(tc['label'].str.contains('England4_'),0,tc[1])
+        tc[2] = np.where(tc['label'].str.contains('England4_'),1,tc[2])
     else:
-        tc['alternate'] = pd.NA
+        tc[0] = np.where(tc['label'].str.contains(f'{target_league}_'),tc[0],0)
+        tc[1] = np.where(tc['label'].str.contains(f'{target_league}_'),tc[1],0)
+        tc[2] = np.where(tc['label'].str.contains(f'{target_league}_'),tc[2],1)
     
     teams_list = tc[tc['label'].str.contains(f"{target_league}_")]
     teams_list = teams_list[teams_list['season']==season]['team'].drop_duplicates().to_list()
     
     tc = tc[tc['team'].isin(teams_list)]
     tc.reset_index(drop=True, inplace=True)
-    tc['label'] = np.where(tc['alternate'].notna(),tc['alternate'],tc['label'])
+    #tc['label'] = np.where(tc['alternate'].notna(),tc['alternate'],tc['label'])
     full_range = pd.DataFrame({"season": range(tc["season"].min(), tc["season"].max() + 1)})
     full_range['team'] = [teams_list] * len(full_range)
     full_range = full_range.explode('team').reset_index(drop=True)
     tc = full_range.merge(tc, on=['team','season'], how='left')
-    tc['label'] = tc['label'].fillna(f'{target_league}_2')
+    #tc['label'] = tc['label'].fillna(f'{target_league}_2')
     tc['P'] = tc['P'].fillna(30)
+    tc[0] = tc[0].fillna(0)
+    tc[1] = tc[1].fillna(0)
+    tc[2] = tc[2].fillna(1)
     #tc = team_clusters[team_clusters["label"].str.contains(f"{target_league}_")]
-    tc['weight'] = np.exp(tc['season']-season) * tc['P'] / 0.75
+    tc['weight'] = np.exp(1.5*(tc['season']-season)) * tc['P'] #!!!verify weightage
+    """
     tc['num'] = (tc['label'].str[-1:]).astype(int)
-    
     tc_pivot = tc.pivot_table(index='team',values='num',aggfunc=lambda x: np.average(x, weights=tc.loc[x.index, 'weight']))
     tc_season = tc.pivot_table(index='team',values='season',aggfunc='max')
     tc_pivot['season'] = tc_season
-    tc_pivot = tc_pivot.reset_index()       
-    tc_pivot['label'] = target_league + "_" + round(tc_pivot['num'],0).astype(int).astype(str)
+    tc_pivot = tc_pivot.reset_index()
+    tc_pivot['label'] = np.where(tc_pivot['num']<2/3,'0',np.where(tc_pivot['num']>4/3,'2','1'))
+    tc_pivot['label'] = target_league + "_" + tc_pivot['label'] #round(tc_pivot['num'],0).astype(int).astype(str)
     tc_pivot = tc_pivot[['team','label','num']]
+    """    
+    tc[0] *= tc['weight']
+    tc[1] *= tc['weight']
+    tc[2] *= tc['weight']
+    #tc_pivot = tc.pivot_table(index='team',columns='num',values='weight',aggfunc='sum')
+    tc_pivot = tc.pivot_table(index='team',values=[0,1,2],aggfunc='sum')
+    tc_pivot = tc_pivot.fillna(0)
+    tc_pivot = tc_pivot.div(tc_pivot.sum(axis=1), axis=0)
+    tc_pivot = tc_pivot.reset_index()
     return tc_pivot
 
 def projections_target_league(target_league,regressed_stats,player_bio,league_strength,stat_aging,team_clusters,season):
@@ -565,16 +619,29 @@ def projections_target_league(target_league,regressed_stats,player_bio,league_st
         age_adjusted_projection[stat] = (pd.to_numeric(age_adjusted_projection[stat], errors='coerce')* factors)
         
     tc = relevant_team_label(target_league,team_clusters,season)
+    #new team clusters implementation
+    tc_new = pd.melt(tc,id_vars=['team'],value_vars=[0,1,2],var_name='label',value_name='val')
+    tc_new['label'] = target_league + "_" + tc_new['label'].astype(str)
     
-    age_adjusted_projection = age_adjusted_projection.merge(tc, on='team', how='left')
+    age_adjusted_projection = age_adjusted_projection.merge(tc_new, on='team', how='left')
     age_adjusted_projection = age_adjusted_projection[~age_adjusted_projection['label'].isna()]
     #apply league strength conversions on data, reverse of the previous
     league_strength_by_row = league_strength.loc[age_adjusted_projection["label"],available_stats].to_numpy()
     target_league_strength = league_strength.loc['England_1',available_stats].to_numpy()
     age_adjusted_projection[available_stats] = age_adjusted_projection[available_stats].to_numpy() *\
                                                 np.exp(target_league_strength-league_strength_by_row)
-                                                
-    return age_adjusted_projection,tc
+      
+    #dynamic team labels implemented
+    df = age_adjusted_projection.drop(columns="label", errors="ignore").copy()
+    weights = pd.to_numeric(df["val"], errors="coerce")
+    grouped = df.groupby("playerId", sort=False)
+    numerator = df[available_stats].mul(weights, axis=0).groupby(df["playerId"], sort=False).sum()
+    denominator = df[available_stats].notna().mul(weights, axis=0).groupby(df["playerId"], sort=False).sum()
+    weighted_stats = numerator.div(denominator.where(denominator.ne(0)))
+    preserve_cols = [c for c in df.columns if c not in available_stats + ["val"]]
+    preserved = grouped[preserve_cols].first()
+    result = pd.concat([preserved, weighted_stats], axis=1).reset_index(drop=True)
+    return result,tc
 
 def calibrate_to_mean(predictions, target_mean):
     #Calibrate a complete prediction cohort to a known mean on sqrt scale.
@@ -590,7 +657,7 @@ def calibrate_to_mean(predictions, target_mean):
     if (mu + shift < 0).any(): raise ValueError("The requested mean requires negative values on the sqrt scale")
     return calibrated
 
-def team_stats_regresion(league,target):
+def team_stats_regresion(league,target,print_val):
     from sklearn.metrics import mean_squared_error, r2_score
     from sklearn.compose import TransformedTargetRegressor
     from sklearn.pipeline import make_pipeline
@@ -629,9 +696,10 @@ def team_stats_regresion(league,target):
     analysis['weight'] = np.exp(analysis['season']-analysis['season'].max())*analysis['P']
     target_mean = (analysis[target]*analysis['weight']).sum()/analysis['weight'].sum()
     
-    #print(target,"rmse is",mse**0.5)
-    #print(target,"train R^2 is",train_r2)
-    #print()
+    if(print_val == 1):
+        print(target,"rmse is",mse**0.5)
+        print(target,"train R^2 is",train_r2)
+        print()
     return reg_model,target_mean
 
 def player_target_credits(players, training_teams, model, target):
@@ -966,9 +1034,9 @@ def league_table(target_league,df):
         
     totals_df = pd.concat(totals_df)
     #model calibration for league
-    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
-    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
-    model_pts,lg_avg_pts = team_stats_regresion(target_league,'Pts')
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF',1)
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA',1)
+    model_pts,lg_avg_pts = team_stats_regresion(target_league,'Pts',1)
     #predictions
     gf = model_gf.predict(totals_df)
     ga = model_ga.predict(totals_df)
@@ -989,8 +1057,8 @@ def league_table(target_league,df):
 def player_valuation(target_league,league_player_stats):
     #standings,gf_factor,ga_factor,pts_factor = league_table(target_league,league_player_stats)
     #model calibration for league
-    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
-    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF',0)
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA',0)
     #team stats
     training_teams = pd.read_excel(f'{path}/{target_league}_teams.xlsx','Sheet2')
     training_teams['ShA'] *= training_teams['P']
@@ -1060,8 +1128,8 @@ def player_valuation_average_team(target_league, league_player_stats, formation=
     if(formation.get('Goalkeeper', 0) != 1 or sum(formation.values()) != 11):
         raise ValueError("formation must contain exactly 1 Goalkeeper and 11 players in total")
 
-    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
-    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF',0)
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA',0)
 
     profiles = average_team_profiles(league_player_stats)
     absent = [p for p in formation if p not in profiles.index]
@@ -1138,8 +1206,8 @@ def game_engine(gw,target_league,df,regstats,custom_lineups):
     home_teams = fixtures['Home'].to_list()
     away_teams = fixtures['Away'].to_list()
     #model calibration for league
-    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF')
-    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA')
+    model_gf,lg_avg_gf = team_stats_regresion(target_league,'GF',0)
+    model_ga,lg_avg_ga = team_stats_regresion(target_league,'GA',0)
     #home advantage, last years numbers
     if(target_league == 'Italy'): home_f=1.07; away_f=.93
     elif(target_league == 'Germany'): home_f=1.084; away_f=.915
@@ -1304,10 +1372,10 @@ def correct_player_positions(league_player_stats,threshold):
     return league_player_stats
 
 #%% calls
-#stabilization_rate(full_player_stats)
-#full_player_stats,team_stats = player_stats_extract('Italy',2027)
-
 season = 2027
+
+#stabilization_rate(full_player_stats)
+#full_player_stats,team_stats = player_stats_extract('Italy',season)
 
 _player_stats, _team_clusters = player_stats_extract_all(season)
 
@@ -1330,7 +1398,7 @@ league_player_stats,tc = projections_target_league(project_league,_regressed_sta
 
 #%% correct player positions and apply injury news
 league_player_stats = correct_player_positions(league_player_stats,1) #threshold to change player position for a subcluster
-league_player_stats,unmatched_names,injuries_df = player_availability(project_league,league_player_stats,0) #1 to ignore injuries
+league_player_stats,unmatched_names,_injuries_df = player_availability(project_league,league_player_stats,0) #1 to ignore injuries
 
 #%% game level results
 #standings,_,_,_ = league_table(project_league,league_player_stats)
@@ -1338,4 +1406,4 @@ league_player_stats,unmatched_names,injuries_df = player_availability(project_le
 #player_value = player_valuation(project_league,league_player_stats)
 #player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
-standings,summary,player_value = game_engine(10,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
+standings,summary,player_value = game_engine(11,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
