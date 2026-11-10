@@ -1,4 +1,4 @@
-# -*- coding: utf-8 -*-
+#%% -*- coding: utf-8 -*-
 """
 Created on Tue Sep 22 15:24:55 2026
 game projections using plyer level data from whoscored
@@ -294,34 +294,79 @@ def team_subclusters(team_stats_list,n):
     team_stats = team_stats[['team','season','label','P'] + membership_cols]
     return team_stats
 
-def player_transfers(player_stats,season):
-    multi_team = player_stats[player_stats['season']==season]
+def player_transfers(ps):
+    multi_team = ps[ps['season']==ps['max_season']]
     multi_team = multi_team[multi_team.duplicated(subset=['playerId'], keep=False)]
     multi_team = multi_team[['playerId','name','team','minsPlayed']]
     return multi_team
 
-def player_age_correction(player_stats,season,offseason,refresh_teams):
-    player_stats = player_stats.sort_values(by=['playerId', 'season'], ascending=[True, False])
+def player_transfers_v2(ps,update_reference):
+    latest_season = ps.pivot_table(index='league',values='season',aggfunc='max')
+    new_mins = ps.merge(latest_season,on='league',how='left')
+    new_mins = new_mins[new_mins['season_x']==new_mins['season_y']]
+    new_mins = new_mins[['playerId','name','team','minsPlayed']]
+    
+    ref_mins = pd.read_excel(f'{path}/ref_mins.xlsx','Sheet1')
+    recon = new_mins.merge(ref_mins[['playerId','team','minsPlayed']], on=['playerId','team'], how='left')
+    recon = recon[recon.duplicated(subset=['playerId'], keep=False)]
+    recon = recon[(recon['minsPlayed_y']-recon['minsPlayed_x'])!=0]
+    recon = recon.sort_values(by=['minsPlayed_x'], ascending=[False])
+    recon = recon.drop_duplicates(subset='playerId',keep='first')
+    recon = recon[['playerId','name','team']]
+    
+    if(update_reference == 1):
+        old_recon = pd.read_excel(f'{path}/ref_mins.xlsx','Sheet2')
+        full_recon = pd.concat([recon,old_recon])
+        full_recon = full_recon.drop_duplicates(subset='playerId',keep='first')
+        with pd.ExcelWriter(f'{path}/ref_mins.xlsx', engine='openpyxl') as writer:
+            new_mins.to_excel(writer, index=False, sheet_name='Sheet1')
+            full_recon.to_excel(writer, index=False, sheet_name='Sheet2')
+
+def player_age_correction(player_stats,season,read_file):
+    #if(offseason == 1): 
+    #    player_stats = player_stats.sort_values(by=['playerId', 'season'], ascending=[True, False])
+    #    bio = player_stats[['playerId','name','season','team','age']].drop_duplicates(subset=['playerId'], keep='first')
+    #    bio = bio.drop_duplicates(subset=['playerId'], keep='last')
+    #    bio['age'] += season - bio['season']
+    #    bio['team'] = np.where(bio['season']!=season-1,np.nan,bio['team'])
+    
+    latest_yr = player_stats.pivot_table(index='league',values='season',aggfunc='max')
+    latest_yr['max_season'] = latest_yr['season']
+    latest_yr = latest_yr.reset_index()
+    
+    player_stats = player_stats.merge(latest_yr[['league','max_season']], on=['league'], how='left')
+    player_stats['team'] = np.where(player_stats['season']==player_stats['max_season'],player_stats['team'],np.nan)
+    #bio['team'] = np.where(bio['season']!=season,np.nan,bio['team'])
+    player_stats = player_stats.sort_values(by=['playerId','season','max_season'], ascending=[True,False,True])
+    
     bio = player_stats[['playerId','name','season','team','age']].drop_duplicates(subset=['playerId'], keep='first')
     bio = bio.drop_duplicates(subset=['playerId'], keep='last')
     bio['age'] += season - bio['season']
-    
-    if(offseason == 1): bio['team'] = np.where(bio['season']!=season-1,np.nan,bio['team'])
-    else: bio['team'] = np.where(bio['season']!=season,np.nan,bio['team'])
-    
+    bio = bio[['playerId','name','age','team']]
     old_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-    old_bio = old_bio.drop(columns=['Unnamed: 0'])
-    if(refresh_teams == 1):
-        bio = bio[['playerId','name','age','team']]
-        bio = bio.merge(old_bio[['playerId','start','sub']], how='left')
-    else:
-        bio = bio[['playerId','name','age']]
-        bio = bio.merge(old_bio[['playerId','team','start','sub']], how='left')
-        
+    #old_bio = old_bio.drop(columns=['Unnamed: 0'])
+    #preserve old start/sub values
+    bio = bio.merge(old_bio[['playerId','start','sub']], how='left')        
     bio = bio[['playerId','name','age','team','start','sub']]
-    full_transfer_list = player_transfers(_player_stats,season)
+    
+    #new transfer algo
+    full_transfer_list = pd.read_excel(f'{path}/ref_mins.xlsx','Sheet2')
+    bio = bio.merge(full_transfer_list[['playerId','team']], on='playerId', how='left')
+    bio['team'] = np.where(bio['team_y'].isna(),bio['team_x'],bio['team_y'])
+    bio = bio[['playerId','name','age','team','start','sub']]
+    
+    if(read_file == 1):
+        bio = old_bio.copy()
+    else:
+        with pd.ExcelWriter(f'{path}/player_bio.xlsx', engine='openpyxl') as writer:
+            bio.to_excel(writer, index=False, sheet_name='Sheet1')
+            
+    #old method
+    """
+    full_transfer_list = player_transfers(player_stats)
     full_transfer_list = full_transfer_list.sort_values(by=['minsPlayed'], ascending=[False])
     transfer_list = full_transfer_list.drop_duplicates(subset=['playerId'])
+    
     bio = bio.merge(transfer_list[['playerId','team']], on='playerId', how='left')
     bio['team'] = np.where(~bio['team_y'].isna(),bio['team_y'],bio['team_x'])
     bio = bio[['playerId','name','age','team','start','sub']]
@@ -330,6 +375,7 @@ def player_age_correction(player_stats,season,offseason,refresh_teams):
     full_transfer_list = pd.DataFrame(full_transfer_list.tolist(), index=full_transfer_list.index)
     full_transfer_list.columns = [f"team{i + 1}" for i in range(full_transfer_list.shape[1])]
     full_transfer_list = full_transfer_list.reset_index()
+    """        
     return bio,full_transfer_list
 
 def aging_effects(player_stats):
@@ -465,7 +511,7 @@ def regression_player_full(full_player_stats,league_strength,season):
                   'tackle_success%','aerial_win%','PssA']
 
     #usually 8, sometimes 7
-    def best_gmm(data, min_k=4, max_k=11, max_rows=4000, patience=2, random_state=0):
+    def best_gmm(data, min_k=7, max_k=11, max_rows=4000, patience=2, random_state=0):
         #Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening
         rng = np.random.default_rng(random_state)
         sample = data[rng.choice(len(data), max_rows, replace=False)] if len(data) > max_rows else data
@@ -513,7 +559,7 @@ def regression_player_full(full_player_stats,league_strength,season):
     
     return reg_stats
 
-def relevant_team_label(target_league,team_clusters,season):
+def relevant_team_label(target_league,team_clusters):
     tc = team_clusters.copy()
     
     if(target_league == 'Germany2'):
@@ -570,7 +616,8 @@ def relevant_team_label(target_league,team_clusters,season):
         tc[2] = np.where(tc['label'].str.contains(f'{target_league}_'),tc[2],1)
     
     teams_list = tc[tc['label'].str.contains(f"{target_league}_")]
-    teams_list = teams_list[teams_list['season']==season]['team'].drop_duplicates().to_list()
+    max_season = teams_list['season'].max()
+    teams_list = teams_list[teams_list['season']==max_season]['team'].drop_duplicates().to_list()
     
     tc = tc[tc['team'].isin(teams_list)]
     tc.reset_index(drop=True, inplace=True)
@@ -585,7 +632,7 @@ def relevant_team_label(target_league,team_clusters,season):
     tc[1] = tc[1].fillna(0)
     tc[2] = tc[2].fillna(1)
     #tc = team_clusters[team_clusters["label"].str.contains(f"{target_league}_")]
-    tc['weight'] = np.exp(1.5*(tc['season']-season)) * tc['P'] #!!!verify weightage
+    tc['weight'] = np.exp(1.5*(tc['season']-max_season)) * tc['P'] #!!!verify weightage, season
     """
     tc['num'] = (tc['label'].str[-1:]).astype(int)
     tc_pivot = tc.pivot_table(index='team',values='num',aggfunc=lambda x: np.average(x, weights=tc.loc[x.index, 'weight']))
@@ -618,7 +665,7 @@ def projections_target_league(target_league,regressed_stats,player_bio,league_st
         factors = np.array([age_delta(stat_aging,stat,age_x,age_y) for age_x, age_y in zip(age_adjusted_projection['age_x'],age_adjusted_projection['age_y'])])
         age_adjusted_projection[stat] = (pd.to_numeric(age_adjusted_projection[stat], errors='coerce')* factors)
         
-    tc = relevant_team_label(target_league,team_clusters,season)
+    tc = relevant_team_label(target_league,team_clusters)
     #new team clusters implementation
     tc_new = pd.melt(tc,id_vars=['team'],value_vars=[0,1,2],var_name='label',value_name='val')
     tc_new['label'] = target_league + "_" + tc_new['label'].astype(str)
@@ -1048,6 +1095,7 @@ def league_table(target_league,df):
     pts = model_pts.predict(totals_df[['GF','GA','GD']])
     pts_factor = lg_avg_pts/pts.mean()
     totals_df['Pts'] = pts * pts_factor
+    #totals_df['Pts_stdev'] = pts_stdev * pts_factor
     totals_df['teams'] = team_list
     totals_df = totals_df[['teams','GF','GA','GD','Pts']]
     totals_df = totals_df.sort_values(by=['Pts'], ascending=[False])
@@ -1299,7 +1347,11 @@ def game_engine(gw,target_league,df,regstats,custom_lineups):
     return standings,summary,player_val
 
 def player_availability(target_league,league_player_stats,ignore_flag):
-    injuries_df = pd.read_excel(f'{path}/injuries.xlsx',target_league)
+    try:
+        injuries_df = pd.read_excel(f'{path}/injuries.xlsx',target_league)
+    except ValueError:
+        injuries_df = pd.read_excel(f'{path}/injuries.xlsx','England')
+        ignore_flag = 1
     injuries_df['status'] = 0
     injuries_df["dt"] = pd.to_datetime(injuries_df["Expected Return"],errors='coerce')
     #nearest sunday found, how would this need to be changed for midweeks?
@@ -1351,11 +1403,16 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     league_player_stats = league_player_stats[~league_player_stats['team'].isna()]
     
     #manual position chnages for corner cases
-    league_player_stats.loc[league_player_stats['playerId']==300447,'positionText'] = 'Forward' #Raphinha
-    league_player_stats.loc[league_player_stats['playerId']==498798,'positionText'] = 'Forward' #Gonzalo García
-    league_player_stats.loc[league_player_stats['playerId']==429556,'positionText'] = 'Forward' #Emersonn
+    league_player_stats.loc[league_player_stats['playerId']==300447,'positionText'] = 'Forward'     #Raphinha
+    league_player_stats.loc[league_player_stats['playerId']==498798,'positionText'] = 'Forward'     #Gonzalo García
+    league_player_stats.loc[league_player_stats['playerId']==429556,'positionText'] = 'Forward'     #Emersonn
     
-    if(ignore_flag == 1): league_player_stats['status'] = 1   
+    if(ignore_flag == 1): 
+        league_player_stats['status'] = 1
+    else:
+        print("players with mismatched names")
+        print(name_mismatch)
+        print()
     return league_player_stats,name_mismatch,injuries_df
 
 def correct_player_positions(league_player_stats,threshold):
@@ -1379,7 +1436,9 @@ season = 2027
 
 _player_stats, _team_clusters = player_stats_extract_all(season)
 
-player_bio,transfers = player_age_correction(_player_stats,season,0,1) #offseason rosters, pick latest team
+player_transfers_v2(_player_stats,1) #new algo or transfered players
+
+player_bio,transfers = player_age_correction(_player_stats,season,0) #1 to read existing file, 0 to overwrite
 
 _league_strength = league_conversions(_player_stats,season)
 
@@ -1387,18 +1446,13 @@ _stat_aging = aging_effects(_player_stats)
 
 _regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
-#%% custom lineups
-player_bio = pd.read_excel(f'{path}/player_bio.xlsx','Sheet1')
-player_bio[['start','sub']] = player_bio[['start','sub']].fillna(0)
-player_bio = player_bio.drop(columns=['Unnamed: 0'])
-
 #%% league forecasts
 project_league = 'England'
 league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% correct player positions and apply injury news
 league_player_stats = correct_player_positions(league_player_stats,1) #threshold to change player position for a subcluster
-league_player_stats,unmatched_names,_injuries_df = player_availability(project_league,league_player_stats,0) #1 to ignore injuries
+league_player_stats,_unmatched_names,injuries_df = player_availability(project_league,league_player_stats,0) #1 to ignore injuries
 
 #%% game level results
 #standings,_,_,_ = league_table(project_league,league_player_stats)
