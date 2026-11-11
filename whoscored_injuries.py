@@ -19,7 +19,7 @@ def player_injury_info(s):
     print(s)
     url = f"https://www.sportsgambler.com/injuries/football/{s}/"
     headers = {"User-Agent": "Mozilla/5.0"}    
-    response = requests.get(url, headers=headers)
+    response = requests.get(url, headers=headers)#, timeout=30)
     response.raise_for_status()
     soup = BeautifulSoup(response.text, "html.parser")    
     injury_rows = soup.find_all("div", class_="inj-row")    
@@ -71,6 +71,7 @@ def update_file():
     spain = player_injury_info('spain-la-liga')
     netherlands = player_injury_info('netherlands-eredivisie')
     portugal = player_injury_info('portugal-primeira-liga')
+    usa = player_injury_info('usa-mls')
     
     with pd.ExcelWriter(f'{path}/injuries.xlsx', engine='openpyxl') as writer:
         england.to_excel(writer, index=False, sheet_name='England')
@@ -81,6 +82,7 @@ def update_file():
         netherlands.to_excel(writer, index=False, sheet_name='Netherlands')
         portugal.to_excel(writer, index=False, sheet_name='Portugal')
         england2.to_excel(writer, index=False, sheet_name='England2')
+        usa.to_excel(writer, index=False, sheet_name='USA')
 
 #%% run command
 update_file()
