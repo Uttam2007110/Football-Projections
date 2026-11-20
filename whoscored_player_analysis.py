@@ -511,7 +511,7 @@ def regression_player_full(full_player_stats,league_strength,season):
                   'tackle_success%','aerial_win%','PssA']
 
     #usually 8, sometimes 7
-    def best_gmm(data, min_k=7, max_k=11, max_rows=4000, patience=2, random_state=0):
+    def best_gmm(data, min_k=8, max_k=11, max_rows=4000, patience=2, random_state=0):
         #Choose the cluster count by BIC (linear in n) on a subsample, stopping once BIC keeps worsening
         rng = np.random.default_rng(random_state)
         sample = data[rng.choice(len(data), max_rows, replace=False)] if len(data) > max_rows else data
@@ -1267,6 +1267,8 @@ def game_engine(gw,target_league,df,regstats,custom_lineups):
     elif(target_league == 'Turkey'): home_f=1.15; away_f=.85
     elif(target_league == 'Netherlands'): home_f=1.12; away_f=.88
     elif(target_league == 'Portugal'): home_f=1.08; away_f=.92
+    elif(target_league == 'USA'): home_f=1.13; away_f=.87
+    elif(target_league == 'Brazil'): home_f=1.15; away_f=.85
     else: home_f=1.1; away_f=.9
 
     for t in range(0,len(home_teams)):
@@ -1346,13 +1348,13 @@ def game_engine(gw,target_league,df,regstats,custom_lineups):
     player_val = player_val.round({'GD90_avg_team': 3})
     return standings,summary,player_val
 
-def player_availability(target_league,league_player_stats,ignore_flag):
+def player_availability(target_league,league_player_stats,full_names_list,ignore_flag):
     try:
         injuries_df = pd.read_excel(f'{path}/injuries.xlsx',target_league)
     except ValueError:
         injuries_df = pd.read_excel(f'{path}/injuries.xlsx','England')
         ignore_flag = 1
-    injuries_df['status'] = 0
+    injuries_df['status'] = 0.001
     injuries_df["dt"] = pd.to_datetime(injuries_df["Expected Return"],errors='coerce')
     #nearest sunday found, how would this need to be changed for midweeks?
     today = pd.Timestamp.now().normalize()
@@ -1361,6 +1363,7 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     #status changes based on nearest sunday
     injuries_df["status"] = np.where(injuries_df["dt"] <= nearest_sunday, 0.75, injuries_df["status"])
     injuries_df["status"] = np.where(injuries_df["dt"].isna(), 0.5, injuries_df["status"])
+    injuries_df['status'] = np.where((injuries_df['Injury']=='Cruciate ligame')&(injuries_df["dt"].isna()),0.001,injuries_df["status"])
     injuries_df = injuries_df.drop_duplicates(subset='Player')
     
     #removing accents from names
@@ -1375,12 +1378,13 @@ def player_availability(target_league,league_player_stats,ignore_flag):
         )
     league_player_stats['clean_name'] = clean_string_key(league_player_stats['name'])
     injuries_df['clean_name'] = clean_string_key(injuries_df['Player'])
+    full_names_list['clean_name'] = clean_string_key(full_names_list['name'])
     #rename players to match
     injuries_df.loc[injuries_df['clean_name']=='Daniel Ballard','clean_name'] = 'Dan Ballard'
     injuries_df.loc[injuries_df['clean_name']=='Mykhaylo Mudryk','clean_name'] = 'Mykhailo Mudryk'
     injuries_df.loc[injuries_df['clean_name']=='Valentino Livramento','clean_name'] = 'Tino Livramento'
     injuries_df.loc[injuries_df['clean_name']=='Franz-Ethan Meichtry','clean_name'] = 'Ethan Meichtry'
-    injuries_df.loc[injuries_df['clean_name']=='A. Buongiorno','clean_name'] = 'Allesio Buongiorno'
+    injuries_df.loc[injuries_df['clean_name']=='A. Buongiorno','clean_name'] = 'Alessandro Buongiorno'
     injuries_df.loc[injuries_df['clean_name']=='Gleison Bremer','clean_name'] = 'Bremer'
     injuries_df.loc[injuries_df['clean_name']=='K. Thuram-Ulien','clean_name'] = 'Khephren Thuram'
     injuries_df.loc[injuries_df['clean_name']=='Miguel Angel Sierra','clean_name'] = 'Miguel Sierra'
@@ -1394,11 +1398,28 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     injuries_df.loc[injuries_df['clean_name']=='M. Fernandez-Pardo','clean_name'] = 'Matias Fernandez-Pardo'
     injuries_df.loc[injuries_df['clean_name']=='Vitaliy Mykolenko','clean_name'] = 'Vitalii Mykolenko'
     injuries_df.loc[injuries_df['clean_name']=='I. Ruiz de','clean_name'] = 'Inigo Ruiz de Galarreta'
+    injuries_df.loc[injuries_df['clean_name']=='Joshua Dasilva','clean_name'] = 'Josh Dasilva'
+    injuries_df.loc[injuries_df['clean_name']=='Juan Riquelme Angulo','clean_name'] = 'Juan Angulo'
+    injuries_df.loc[injuries_df['clean_name']=='Sammie Szmodics','clean_name'] = 'Sam Szmodics'
+    injuries_df.loc[injuries_df['clean_name']=='Chico Conceicao','clean_name'] = 'Francisco Conceicao'
+    injuries_df.loc[injuries_df['clean_name']=="Abdoulaye N'Diaye",'clean_name'] = 'Abdoulaye Ndiaye'
+    injuries_df.loc[injuries_df['clean_name']=="Joi Xheto Nuredini",'clean_name'] = 'Joi Nuredini'
+    injuries_df.loc[injuries_df['clean_name']=="Bara Ndiaye",'clean_name'] = 'Bara Sapoko Ndiaye'
+    injuries_df.loc[injuries_df['clean_name']=="Derrick Koehn",'clean_name'] = 'Derrick Kohn'
+    injuries_df.loc[injuries_df['clean_name']=="Jan Leszcynski",'clean_name'] = 'Jan Leszczynski'
+    injuries_df.loc[injuries_df['clean_name']=="Mario Goetze",'clean_name'] = 'Mario Gotze'
+    injuries_df.loc[injuries_df['clean_name']=="Maximilian Woeber",'clean_name'] = 'Max Wober'
+    injuries_df.loc[injuries_df['clean_name']=="Stanley N'Soki",'clean_name'] = 'Stanley Nsoki'
+    injuries_df.loc[injuries_df['clean_name']=="Timo Huebers",'clean_name'] = 'Timo Hubers'
+    injuries_df.loc[injuries_df['clean_name']=="Jones El-Abdellaoui",'clean_name'] = 'Jones El Abdellaoui'
+    injuries_df.loc[injuries_df['clean_name']=="Manuel Sanchez",'clean_name'] = 'Manu Sanchez'
+    injuries_df.loc[injuries_df['clean_name']=="Zaid Abner Romero",'clean_name'] = 'Zaid Romero'
     #merge
     league_player_stats = league_player_stats.merge(injuries_df[['clean_name','status']], on='clean_name', how='outer')
     league_player_stats['status'] = league_player_stats['status'].fillna(1)
+    full_names_list = full_names_list.merge(injuries_df[['clean_name','status']], on='clean_name', how='outer')
     #mismatched names
-    name_mismatch = league_player_stats[league_player_stats['team'].isna()]
+    name_mismatch = full_names_list[full_names_list['playerId'].isna()]
     name_mismatch = name_mismatch['clean_name'].to_list()
     league_player_stats = league_player_stats[~league_player_stats['team'].isna()]
     
@@ -1406,6 +1427,7 @@ def player_availability(target_league,league_player_stats,ignore_flag):
     league_player_stats.loc[league_player_stats['playerId']==300447,'positionText'] = 'Forward'     #Raphinha
     league_player_stats.loc[league_player_stats['playerId']==498798,'positionText'] = 'Forward'     #Gonzalo García
     league_player_stats.loc[league_player_stats['playerId']==429556,'positionText'] = 'Forward'     #Emersonn
+    league_player_stats.loc[league_player_stats['playerId']==495260,'positionText'] = 'Forward'     #Patrick Dorgu
     
     if(ignore_flag == 1): 
         league_player_stats['status'] = 1
@@ -1438,7 +1460,7 @@ _player_stats, _team_clusters = player_stats_extract_all(season)
 
 player_transfers_v2(_player_stats,1) #new algo or transfered players
 
-player_bio,transfers = player_age_correction(_player_stats,season,0) #1 to read existing file, 0 to overwrite
+_player_bio,transfers = player_age_correction(_player_stats,season,0) #1 to read existing file, 0 to overwrite
 
 _league_strength = league_conversions(_player_stats,season)
 
@@ -1448,11 +1470,11 @@ _regressed_stats = regression_player_full(_player_stats,_league_strength,season)
 
 #%% league forecasts
 project_league = 'England'
-league_player_stats,tc = projections_target_league(project_league,_regressed_stats,player_bio,_league_strength,_stat_aging,_team_clusters,season)
+league_player_stats,tc = projections_target_league(project_league,_regressed_stats,_player_bio,_league_strength,_stat_aging,_team_clusters,season)
 
 #%% correct player positions and apply injury news
 league_player_stats = correct_player_positions(league_player_stats,1) #threshold to change player position for a subcluster
-league_player_stats,_unmatched_names,injuries_df = player_availability(project_league,league_player_stats,0) #1 to ignore injuries
+league_player_stats,_unmatched_names,injuries_df = player_availability(project_league,league_player_stats,_regressed_stats.copy(),0) #1-injuries off
 
 #%% game level results
 #standings,_,_,_ = league_table(project_league,league_player_stats)
@@ -1460,4 +1482,4 @@ league_player_stats,_unmatched_names,injuries_df = player_availability(project_l
 #player_value = player_valuation(project_league,league_player_stats)
 #player_value_avg_team = player_valuation_average_team(project_league,league_player_stats)
 
-standings,summary,player_value = game_engine(11,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
+standings,summary,player_value = game_engine(12,project_league,league_player_stats,_regressed_stats,0) #gameweek, use custom lineups
